@@ -8,23 +8,51 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { niche, location, limit = 10, apiKey, aiProvider, aiModel } = body;
+    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto' } = body;
 
-    if (!niche || !location) {
-      return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
+    // Support comma-separated platforms (e.g. "reddit,x,linkedin") or single platform
+    const activePlatform = platforms || platform;
+
+    let fetchUrl = '';
+    let searchQuery = '';
+
+    if (activePlatform === 'gmaps') {
+      if (!niche || !location) {
+        return NextResponse.json({ error: 'Missing niche/location for Gmaps' }, { status: 400 });
+      }
+      searchQuery = `${niche} in ${location}`;
+      fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(niche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+    } else {
+      if (!keyword) {
+        return NextResponse.json({ error: 'Missing keyword for social scrape' }, { status: 400 });
+      }
+      searchQuery = `[${activePlatform}] ${keyword}`;
+      fetchUrl = `http://127.0.0.1:8000/scrape-social?platform=${encodeURIComponent(activePlatform)}&keyword=${encodeURIComponent(keyword)}&limit=${limit}&search_mode=${encodeURIComponent(searchMode)}`;
     }
 
     const batchId = crypto.randomUUID();
-    const searchQuery = `${niche} in ${location}`;
     const encoder = new TextEncoder();
 
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const pythonResponse = await fetch(`http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(niche)}&location=${encodeURIComponent(location)}&limit=${limit}`, { 
-            cache: 'no-store',
-            signal: req.signal
-          });
+          let pythonResponse: Response;
+          try {
+            pythonResponse = await fetch(fetchUrl, { 
+              cache: 'no-store',
+              signal: req.signal
+            });
+          } catch (fetchError: any) {
+            // EDGE CASE: Python backend unreachable (connection refused, ECONNREFUSED, etc.)
+            const isConnRefused = fetchError.cause?.code === 'ECONNREFUSED' || fetchError.message?.includes('ECONNREFUSED') || fetchError.message?.includes('fetch failed');
+            const errorMsg = isConnRefused
+              ? 'Python scraping backend is not running. Start it with: uvicorn main:app --port 8000'
+              : `Failed to connect to scraping backend: ${fetchError.message}`;
+            controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', message: errorMsg }) + '\n'));
+            controller.enqueue(encoder.encode(JSON.stringify({ type: 'done' }) + '\n'));
+            controller.close();
+            return;
+          }
           
           if (!pythonResponse.ok || !pythonResponse.body) {
              throw new Error('Python backend failed to start scraping.');
@@ -64,9 +92,25 @@ export async function POST(req: NextRequest) {
                     controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', message: rawLead.message }) + '\n'));
                     continue;
                 }
+                if (rawLead.type === 'rate_limited') {
+                    // Pass the cooldown notice straight through so the UI can pop a dialog
+                    // and stop hitting that platform — protects the IP from a ban.
+                    controller.enqueue(encoder.encode(JSON.stringify(rawLead) + '\n'));
+                    continue;
+                }
 
-                // If ID is already provided by python, use it, otherwise generate one based on name
-                rawLead.id = rawLead.id || rawLead.name.replace(/\s+/g, '-').toLowerCase().substring(0, 50);
+                // EDGE CASE: If lead has no name, use author or title as fallback
+                if (!rawLead.name) {
+                  rawLead.name = rawLead.author || rawLead.title || 'Unknown Lead';
+                }
+
+                // EDGE CASE: If external_id is present, use it as the lead's id for dedup
+                if (rawLead.external_id) {
+                  rawLead.id = rawLead.external_id;
+                } else {
+                  // If ID is already provided by python, use it, otherwise generate one based on name
+                  rawLead.id = rawLead.id || rawLead.name.replace(/\s+/g, '-').toLowerCase().substring(0, 50);
+                }
 
                 // Send raw lead
                 console.log("Sending raw lead to frontend:", rawLead.name);
@@ -77,12 +121,12 @@ export async function POST(req: NextRequest) {
                 const scoredLead = await scoreLead(rawLead, apiKey, aiProvider, aiModel);
                 console.log("Scored lead:", scoredLead.name);
                 
-                // Save to DB (UPSERT)
+                // Save to DB (UPSERT) — includes all new social lead columns
                 try {
                   await query(
                     `INSERT INTO gmaps_leads 
-                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
                      ON CONFLICT (id) DO UPDATE SET
                       name = EXCLUDED.name,
                       address = EXCLUDED.address,
@@ -99,6 +143,16 @@ export async function POST(req: NextRequest) {
                       rationale = EXCLUDED.rationale,
                       suggested_pitch = EXCLUDED.suggested_pitch,
                       suggested_subject = EXCLUDED.suggested_subject,
+                      platform = EXCLUDED.platform,
+                      kind = EXCLUDED.kind,
+                      author = EXCLUDED.author,
+                      author_url = EXCLUDED.author_url,
+                      post_url = EXCLUDED.post_url,
+                      post_content = EXCLUDED.post_content,
+                      title = EXCLUDED.title,
+                      matched_keyword = EXCLUDED.matched_keyword,
+                      pain_point = EXCLUDED.pain_point,
+                      posted_at = EXCLUDED.posted_at,
                       scraped_at = CURRENT_TIMESTAMP`,
                     [
                       scoredLead.id,
@@ -119,7 +173,18 @@ export async function POST(req: NextRequest) {
                       scoredLead.lead_category || null,
                       scoredLead.rationale || null,
                       scoredLead.suggested_pitch || null,
-                      scoredLead.suggested_subject || null
+                      scoredLead.suggested_subject || null,
+                      scoredLead.platform || activePlatform || 'gmaps',
+                      scoredLead.external_id || null,
+                      scoredLead.kind || (activePlatform === 'gmaps' ? 'business_listing' : 'post'),
+                      scoredLead.author || null,
+                      scoredLead.author_url || null,
+                      scoredLead.post_url || null,
+                      scoredLead.post_content || null,
+                      scoredLead.title || null,
+                      scoredLead.matched_keyword || null,
+                      scoredLead.pain_point || null,
+                      scoredLead.posted_at || null,
                     ]
                   );
                 } catch (dbError: any) {

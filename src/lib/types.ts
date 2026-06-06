@@ -12,6 +12,17 @@ export interface RawLead {
   is_claimed?: boolean;
   socials?: string[];
   about_snippet?: string;
+  // Social / multi-platform fields
+  platform?: string;      // 'gmaps' | 'reddit' | 'x' | 'linkedin' | 'hackernews' | 'devto' | 'stackoverflow' | 'instagram' | 'producthunt' | 'quora' | 'upwork'
+  kind?: string;          // 'business_listing' | 'post' | 'comment' | 'job'
+  author?: string;
+  author_url?: string;
+  post_url?: string;
+  post_content?: string;
+  title?: string;
+  matched_keyword?: string;
+  posted_at?: string;
+  external_id?: string;
 }
 
 export interface ScoredLead extends RawLead {
@@ -20,5 +31,6 @@ export interface ScoredLead extends RawLead {
   rationale: string;
   suggested_pitch: string;
   suggested_subject?: string;
+  pain_point?: string;
   status?: string; // 'Uncontacted' | 'Emailed' | 'Replied' | 'Closed'
 }

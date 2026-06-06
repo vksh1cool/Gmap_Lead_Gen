@@ -2,3 +2,7 @@ fastapi
 uvicorn
 playwright
 playwright-stealth
+requests
+beautifulsoup4
+lxml
+python-dotenv

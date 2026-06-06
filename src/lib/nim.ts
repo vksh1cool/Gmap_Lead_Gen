@@ -30,6 +30,67 @@ function detectLinkType(url: string): 'instagram' | 'facebook' | 'twitter' | 'yo
 }
 
 function ruleBasedScore(lead: RawLead): { score: number; category: string; rationale: string; pitch: string; subject: string } {
+  const isSocialPost = lead.category === 'Social Post' || (lead.kind && lead.kind !== 'business_listing');
+  const isJobListing = lead.kind === 'job';
+
+  if (isSocialPost && !isJobListing) {
+    const content = (lead.post_content || lead.about_snippet || '').toLowerCase();
+    let score = 5;
+    const reasons: string[] = [];
+
+    // Longer content = more detail = better signal
+    if (content.length > 500) { score += 1; reasons.push('Detailed post (good signal)'); }
+    else if (content.length < 50) { score -= 1; reasons.push('Very short post (weak signal)'); }
+
+    // Buyer-intent phrases
+    const buyerPhrases = ['looking for', 'need a', 'need an', 'hire', 'hiring', 'budget', 'recommend', 'suggestion', 'anyone know', 'help me find', 'agency', 'freelancer', 'contractor', 'quote', 'proposal'];
+    const buyerHits = buyerPhrases.filter(p => content.includes(p));
+    if (buyerHits.length >= 2) { score += 2; reasons.push(`Strong buyer intent: ${buyerHits.slice(0, 3).join(', ')}`); }
+    else if (buyerHits.length === 1) { score += 1; reasons.push(`Possible buyer intent: ${buyerHits[0]}`); }
+
+    // Seller / job-seeker phrases — these should score LOW
+    const sellerPhrases = ['i am a developer', 'i am a designer', 'looking for work', 'open to work', 'my portfolio', 'available for hire', 'i build', 'i create', 'dm me for', 'check out my'];
+    const sellerHits = sellerPhrases.filter(p => content.includes(p));
+    if (sellerHits.length > 0) { score -= 3; reasons.push(`Seller/job-seeker detected: ${sellerHits[0]}`); }
+
+    score = Math.max(1, Math.min(10, score));
+
+    return {
+      score,
+      category: 'Pending', // Let AI refine
+      rationale: reasons.length > 0 ? reasons.join('. ') + '.' : 'Pending AI semantic analysis to verify buyer intent.',
+      pitch: 'Hey, saw your post and wanted to connect.',
+      subject: 'Regarding your recent post'
+    };
+  }
+
+  if (isJobListing) {
+    const content = (lead.post_content || lead.about_snippet || lead.title || '').toLowerCase();
+    let score = 7; // Job listings are always buyers
+    const reasons: string[] = ['Job listing — author is a buyer by definition'];
+
+    // Budget signals
+    if (content.includes('budget') || /\$\d/.test(content)) { score += 1; reasons.push('Budget mentioned'); }
+    // Scope signals
+    if (content.length > 300) { score += 1; reasons.push('Detailed scope'); }
+    // Service fit
+    const fitPhrases = ['website', 'web app', 'seo', 'landing page', 'ecommerce', 'shopify', 'wordpress', 'react', 'next.js', 'frontend', 'full stack', 'automation', 'ai', 'chatbot'];
+    const fitHits = fitPhrases.filter(p => content.includes(p));
+    if (fitHits.length >= 2) { score += 1; reasons.push(`Strong service fit: ${fitHits.slice(0, 3).join(', ')}`); }
+    else if (fitHits.length === 0) { score -= 2; reasons.push('Weak service fit — may not match our offerings'); }
+
+    score = Math.max(1, Math.min(10, score));
+    const category = score >= 8 ? 'Diamond' : score >= 5 ? 'Gold' : 'Junk';
+
+    return {
+      score,
+      category,
+      rationale: reasons.join('. ') + '.',
+      pitch: `Hi — saw your project listing and it aligns well with what we do. Happy to discuss scope and share relevant examples.`,
+      subject: lead.title ? `Re: ${lead.title.substring(0, 60)}` : 'Regarding your project listing'
+    };
+  }
+
   let score = 5;
   const reasons: string[] = [];
   const flaws: string[] = [];
@@ -206,7 +267,87 @@ export async function scoreLead(
 
   const openai = new OpenAI(clientOptions);
 
-  const prompt = `
+  const isSocial = lead.category === 'Social Post' || (lead.kind && lead.kind !== 'business_listing');
+  const isJobListing = lead.kind === 'job';
+  const postContent = lead.post_content || safeSnippet || '';
+  let prompt = '';
+
+  if (isJobListing) {
+    // ── BRANCH 3: Job Listings (Upwork, etc.) — author is ALWAYS a buyer ──
+    prompt = `
+You are an elite B2B Lead Qualifier for a digital agency specializing in web dev, SEO, and AI automation.
+You are analyzing a JOB LISTING. The author is ALWAYS a buyer — never a seller. Your job is to score based on project fit, budget signals, and scope clarity.
+
+Job Title: ${lead.title || 'N/A'}
+Platform: ${lead.platform || 'upwork'}
+Author: ${lead.author || lead.name}
+Job Content:
+${postContent}
+
+Scoring Rules:
+- "Diamond" (Score 8-10): Clear budget mentioned ($1k+), detailed scope, strong service fit (web dev, SEO, AI, automation, landing pages, e-commerce).
+- "Gold" (Score 5-7): Moderate fit — the project is related but vague on budget/scope, or is a small task.
+- "Junk" (Score 1-4): No service fit (e.g., data entry, accounting, legal). Tiny budget (<$100). Unrealistic expectations.
+
+Extract the core pain_point: What problem is the buyer trying to solve? (1 sentence)
+
+Pitch Guidelines:
+1. Write a 2-sentence proposal intro referencing their specific requirements.
+2. Mention a relevant case study or metric (e.g., "We recently built a similar e-commerce platform that increased conversions by 35%.").
+
+Output this exact JSON (no markdown, no explanation):
+{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "rationale": "<reason citing their requirements>", "pain_point": "<1-sentence problem they need solved>", "suggested_subject": "<proposal opener>", "suggested_pitch": "<your proposal intro>"}
+`;
+  } else if (isSocial) {
+    // ── BRANCH 2: Social Posts — must determine BUYER vs SELLER ──
+    prompt = `
+You are an elite B2B Lead Qualifier. Your goal is to ruthlessly filter out junk and identify TRUE BUYERS from social media posts.
+Your agency specializes in web dev, SEO, and AI automation.
+
+CRITICAL CHAIN-OF-THOUGHT INSTRUCTION:
+Step 1: Read the post below.
+Step 2: Determine — is the author a BUYER (someone who needs services) or a SELLER (someone offering services, looking for work, or self-promoting)?
+Step 3: If SELLER → immediately score 1-3 (Junk). Do NOT give benefit of the doubt.
+Step 4: If BUYER → score based on intent strength.
+
+Post Author: ${lead.author || lead.name}
+Post URL: ${lead.post_url || lead.website || 'N/A'}
+Platform: ${lead.platform || 'unknown'}
+Post Title: ${lead.title || 'N/A'}
+Post Content:
+${postContent}
+
+Scoring Rules (PRECISION > RECALL — when in doubt, score LOW):
+
+"Diamond" (Score 8-10) — REAL examples:
+  - "Looking for a web developer to build our startup's MVP. Budget $5k-10k."
+  - "Can anyone recommend a good SEO agency? We're getting zero organic traffic."
+  - "Need to hire someone to automate our customer onboarding with AI."
+
+"Gold" (Score 5-7) — REAL examples:
+  - "My website is so slow, losing customers every day."
+  - "Our Google rankings dropped after the last update, frustrated."
+  - "Anyone else struggling with lead generation?"
+
+"Junk" (Score 1-4) — REAL examples:
+  - "I am a full-stack developer with 5 years experience, open to work!" → SELLER, score 1
+  - "Just launched my new web design agency!" → COMPETITOR, score 1
+  - "Here's a tutorial on how to build a React app" → CONTENT, score 2
+  - "Check out this cool AI tool I found" → SHARING, score 3
+  - "Web development is changing so fast these days" → CHATTING, score 2
+
+Extract pain_point: What specific problem is the author facing? (1 sentence, or "none" if Junk)
+
+Pitch Guidelines:
+1. If Diamond/Gold: Write a highly personalized 2-sentence DM/reply that directly references their post content and offers a massive value-add.
+2. If Junk: Set suggested_pitch to empty string.
+
+Output this exact JSON (no markdown, no explanation):
+{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "rationale": "<BUYER or SELLER, then specific reason citing their text>", "pain_point": "<1-sentence problem or none>", "suggested_subject": "<short DM opener>", "suggested_pitch": "<your killer DM or empty>"}
+`;
+  } else {
+    // ── BRANCH 1: Google Maps Business ──
+    prompt = `
 You are an elite B2B Lead Qualifier and Cold Email Copywriter for a high-end digital marketing agency.
 Your goal is to analyze this Google Maps business and generate an incredibly personalized, high-converting cold email pitch.
 Your agency specializes in cutting-edge growth: Web Dev, SEO, AEO (Answer Engine Optimization), GEO (Generative Engine Optimization), and LLMO (LLM Optimization).
@@ -230,6 +371,7 @@ Pitch Guidelines (CRITICAL):
 Output this exact JSON structure (no markdown, no explanation):
 {"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "rationale": "<specific reason>", "suggested_subject": "<catchy, informal email subject>", "suggested_pitch": "<your killer cold email>"}
 `;
+  }
 
   try {
     const response = await openai.chat.completions.create({
@@ -254,6 +396,7 @@ Output this exact JSON structure (no markdown, no explanation):
       rationale: parsed.rationale || rules.rationale,
       suggested_pitch: parsed.suggested_pitch || rules.pitch,
       suggested_subject: parsed.suggested_subject || rules.subject,
+      ...(parsed.pain_point ? { pain_point: parsed.pain_point } : {}),
     };
   } catch (error: any) {
     console.error("AI Error:", error.message, "— falling back to rule-based scoring");

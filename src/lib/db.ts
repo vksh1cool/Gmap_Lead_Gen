@@ -10,7 +10,23 @@ const pool = new Pool({
   connectionString,
 });
 
+// Lazily ensure the schema exists/upgraded exactly once per process, so a fresh
+// Neon DB (or a deploy that adds columns) self-heals on first query instead of
+// silently 500-ing with "column ... does not exist".
+let schemaReady: Promise<void> | null = null;
+function ensureSchema(): Promise<void> {
+  if (!schemaReady) {
+    schemaReady = initDB().catch((e) => {
+      // Don't permanently cache a failure — allow a retry on the next query.
+      schemaReady = null;
+      console.error('Schema init failed:', e);
+    });
+  }
+  return schemaReady;
+}
+
 export async function query(text: string, params?: any[]) {
+  await ensureSchema();
   return pool.query(text, params);
 }
 
@@ -43,6 +59,20 @@ export async function initDB() {
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS about_snippet TEXT;
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS is_claimed BOOLEAN DEFAULT TRUE;
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Uncontacted';
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS platform VARCHAR(50) DEFAULT 'gmaps';
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS external_id TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS kind VARCHAR(20) DEFAULT 'business_listing';
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS author TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS author_url TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS post_url TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS post_content TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS title TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS matched_keyword TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS pain_point TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS posted_at TIMESTAMP;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS suggested_subject TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS batch_id TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS search_query TEXT;
   `;
   try {
     await pool.query(createTableQuery);

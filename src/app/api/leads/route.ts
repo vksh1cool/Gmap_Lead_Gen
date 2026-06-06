@@ -1,13 +1,29 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const result = await query(
-      `SELECT * FROM gmaps_leads ORDER BY scraped_at DESC LIMIT 500`
-    );
+    const { searchParams } = new URL(req.url);
+    const platform = searchParams.get('platform');
+
+    let sqlQuery = `SELECT id, name, address, phone, website, rating, reviews, category, 
+      emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, 
+      rationale, suggested_pitch, suggested_subject, status, scraped_at,
+      platform, kind, author, author_url, post_url, post_content, title, 
+      matched_keyword, pain_point, posted_at, external_id, batch_id, search_query
+      FROM gmaps_leads`;
+    const params: string[] = [];
+
+    if (platform) {
+      sqlQuery += ` WHERE platform = $1`;
+      params.push(platform);
+    }
+
+    sqlQuery += ` ORDER BY scraped_at DESC LIMIT 500`;
+
+    const result = await query(sqlQuery, params);
     return NextResponse.json({ leads: result.rows });
   } catch (error: any) {
     console.error('Error fetching leads:', error);

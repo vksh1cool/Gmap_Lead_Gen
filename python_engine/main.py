@@ -4,15 +4,51 @@ import random
 import re
 import math
 from urllib.parse import quote
+
+# Load python_engine/.env (SERPER_API_KEY, REDDIT_CLIENT_ID, PRODUCTHUNT_TOKEN, …)
+# before any scraper reads os.getenv. Safe no-op if the file is absent.
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from playwright.async_api import async_playwright, TimeoutError, Page, BrowserContext
 from playwright_stealth import Stealth
+from pydantic import BaseModel
+from social_scraper import scrape_social_orchestrator
+from scrapers.serper_keys import key_manager
 
 async def stealth_async(page):
     await Stealth().apply_stealth_async(page)
 
 app = FastAPI()
+
+
+# ── Serper key-pool management (rotation across free 2,500-credit accounts) ──
+class SerperKeyIn(BaseModel):
+    key: str
+
+
+@app.get("/serper-keys")
+async def list_serper_keys():
+    keys = key_manager.list_status()
+    return {
+        "keys": keys,
+        "active_count": sum(1 for k in keys if not k["exhausted"]),
+        "total": len(keys),
+    }
+
+
+@app.post("/serper-keys")
+async def add_serper_key(body: SerperKeyIn):
+    ok = key_manager.add_key(body.key)
+    return {"success": ok, "keys": key_manager.list_status()}
+
+
+@app.delete("/serper-keys/{tail}")
+async def delete_serper_key(tail: str):
+    ok = key_manager.remove_key_by_tail(tail)
+    return {"success": ok, "keys": key_manager.list_status()}
 
 EMAIL_REGEX = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
 SOCIAL_REGEX = r"https?://(?:www\.)?(facebook\.com|twitter\.com|linkedin\.com|instagram\.com)/[a-zA-Z0-9._-]+"
@@ -123,12 +159,20 @@ async def process_business_url(href: str, context: BrowserContext, engine: AntiB
             if await rating_el.count() > 0:
                 aria_label = await rating_el.get_attribute("aria-label")
                 if aria_label:
-                    rating = aria_label.split(" ")[0]
-            review_button = page.locator('button[aria-label*="reviews"]').first
+                    # aria-label is like "4.8 stars" — grab the leading number
+                    m = re.search(r"([\d.]+)", aria_label)
+                    if m:
+                        rating = m.group(1)
+            # Reviews: read the COUNT from the aria-label, never the button text.
+            # button.text_content() returns a Material-Icon glyph (e.g. ""),
+            # whereas the aria-label reads "1,234 reviews".
+            review_button = page.locator('button[aria-label*="review"]').first
             if await review_button.count() > 0:
-                review_text = await review_button.text_content()
-                if review_text:
-                    reviews = review_text.replace("reviews", "").replace("review", "").replace("(", "").replace(")", "").strip()
+                aria_label = await review_button.get_attribute("aria-label")
+                if aria_label:
+                    m = re.search(r"([\d,]+)\s*review", aria_label)
+                    if m:
+                        reviews = m.group(1).replace(",", "")
         except Exception: pass
             
         website = ""
@@ -305,5 +349,20 @@ async def scrape_google_maps(niche: str, location: str, limit: int):
 async def scrape_endpoint(niche: str, location: str, limit: int = 10):
     return StreamingResponse(
         scrape_google_maps(niche, location, limit),
+        media_type="application/x-ndjson"
+    )
+
+async def stream_social_leads(platform: str, keyword: str, limit: int, search_mode: str = "auto"):
+    result = await scrape_social_orchestrator(platform, keyword, limit, search_mode)
+    # Emit rate-limit notices first so the UI can pop the cooldown dialog early.
+    for notice in result.get("notices", []):
+        yield json.dumps(notice) + "\n"
+    for lead in result.get("leads", []):
+        yield json.dumps(lead) + "\n"
+
+@app.get("/scrape-social")
+async def scrape_social_endpoint(platform: str, keyword: str, limit: int = 10, search_mode: str = "auto"):
+    return StreamingResponse(
+        stream_social_leads(platform, keyword, limit, search_mode),
         media_type="application/x-ndjson"
     )

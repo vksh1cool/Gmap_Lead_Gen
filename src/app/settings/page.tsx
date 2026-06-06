@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Key, Save, CheckCircle2, Eye, EyeOff, Trash2, Shield, Cpu, Zap, ExternalLink, Info, Database } from 'lucide-react';
+import { Key, Save, CheckCircle2, Eye, EyeOff, Trash2, Shield, Cpu, Zap, ExternalLink, Info, Database, Plus, RefreshCw, Globe } from 'lucide-react';
+
+type SerperKey = { masked: string; tail: string; exhausted: boolean; active: boolean; source?: string };
 
 const PROVIDERS = [
   { id: 'nim', name: 'NVIDIA NIM', icon: <Cpu className="w-5 h-5" />, color: 'emerald' },
@@ -31,6 +33,48 @@ export default function SettingsPage() {
   const [isSaved, setIsSaved] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
+  // ── Serper key pool (auto-rotation across free 2,500-credit accounts) ──
+  const [serperKeys, setSerperKeys] = useState<SerperKey[]>([]);
+  const [newSerperKey, setNewSerperKey] = useState('');
+  const [serperBusy, setSerperBusy] = useState(false);
+  const [serperError, setSerperError] = useState('');
+
+  const loadSerperKeys = async () => {
+    try {
+      const r = await fetch('/api/serper-keys', { cache: 'no-store' });
+      const d = await r.json();
+      if (Array.isArray(d.keys)) setSerperKeys(d.keys);
+      setSerperError(d?.error || '');
+    } catch {
+      setSerperError('Scraping engine not reachable (start uvicorn on :8000).');
+    }
+  };
+
+  const addSerperKey = async () => {
+    const key = newSerperKey.trim();
+    if (key.length < 8) { setSerperError('That key looks too short.'); return; }
+    setSerperBusy(true); setSerperError('');
+    try {
+      const r = await fetch('/api/serper-keys', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+      });
+      const d = await r.json();
+      if (d.error) setSerperError(d.error);
+      else { setSerperKeys(d.keys || []); setNewSerperKey(''); }
+    } catch { setSerperError('Scraping engine not reachable.'); }
+    setSerperBusy(false);
+  };
+
+  const removeSerperKey = async (tail: string) => {
+    setSerperBusy(true);
+    try {
+      const r = await fetch(`/api/serper-keys?tail=${encodeURIComponent(tail)}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (Array.isArray(d.keys)) setSerperKeys(d.keys);
+    } catch { setSerperError('Scraping engine not reachable.'); }
+    setSerperBusy(false);
+  };
+
   useEffect(() => {
     setIsMounted(true);
     const provider = localStorage.getItem('ai_provider') || 'nim';
@@ -47,6 +91,8 @@ export default function SettingsPage() {
       openai: localStorage.getItem('openai_model') || DEFAULT_MODELS.openai,
       gemini: localStorage.getItem('gemini_model') || DEFAULT_MODELS.gemini,
     });
+
+    loadSerperKeys();
   }, []);
 
   const handleSave = () => {
@@ -246,8 +292,104 @@ export default function SettingsPage() {
         </div>
       </motion.section>
 
+      {/* ── Serper Search Key Pool (auto-rotation) ── */}
+      <motion.section
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="bg-black/40 backdrop-blur-2xl border border-white/[0.08] rounded-3xl p-8 space-y-6 relative overflow-hidden shadow-2xl"
+      >
+        <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative z-10">
+          <div className="flex items-center gap-4 border-b border-white/5 pb-6">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 flex items-center justify-center border border-emerald-500/20 shadow-inner">
+              <Globe className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div className="flex-1">
+              <h2 className="text-xl font-bold text-white tracking-tight">Serper Search Keys</h2>
+              <p className="text-sm text-white/40 mt-0.5">
+                Powers LinkedIn / Instagram / Quora / Upwork / Reddit / ProductHunt. Auto-rotates when a key runs out.
+              </p>
+            </div>
+            <a href="https://serper.dev/api-keys" target="_blank" rel="noreferrer"
+              className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors shrink-0">
+              Get a free key <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+
+          {/* Status summary */}
+          <div className="mt-6 flex items-center gap-4 flex-wrap">
+            <div className="px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+              <span className="text-2xl font-black text-emerald-400 tabular-nums">
+                {serperKeys.filter(k => !k.exhausted).length}
+              </span>
+              <span className="text-xs text-white/50 ml-2">active key{serperKeys.filter(k => !k.exhausted).length !== 1 ? 's' : ''}</span>
+            </div>
+            <div className="px-4 py-2 rounded-xl bg-white/[0.03] border border-white/10">
+              <span className="text-2xl font-black text-white tabular-nums">
+                ~{(serperKeys.filter(k => !k.exhausted).length * 2500).toLocaleString()}
+              </span>
+              <span className="text-xs text-white/50 ml-2">searches left</span>
+            </div>
+            <button onClick={loadSerperKeys} disabled={serperBusy}
+              className="ml-auto p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition disabled:opacity-40"
+              title="Refresh">
+              <RefreshCw className={`w-4 h-4 ${serperBusy ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {/* Key list */}
+          <div className="mt-5 space-y-2">
+            {serperKeys.length === 0 && (
+              <div className="text-center py-6 text-sm text-white/30">
+                No Serper keys yet. Add one below — the dork platforms fall back to (rate-limited) keyless search without it.
+              </div>
+            )}
+            {serperKeys.map((k) => (
+              <div key={k.tail}
+                className={`flex items-center justify-between px-4 py-3 rounded-xl border ${
+                  k.active ? 'bg-emerald-500/[0.07] border-emerald-500/25'
+                  : k.exhausted ? 'bg-red-500/[0.04] border-red-500/15'
+                  : 'bg-white/[0.02] border-white/10'}`}>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-sm text-white/70">{k.masked}</span>
+                  {k.active && <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">In use</span>}
+                  {k.exhausted && <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-red-500/15 text-red-300">Exhausted</span>}
+                  {!k.active && !k.exhausted && <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/10 text-white/40">Standby</span>}
+                </div>
+                <button onClick={() => removeSerperKey(k.tail)} disabled={serperBusy}
+                  className="p-1.5 rounded-lg hover:bg-red-500/20 text-white/30 hover:text-red-400 transition disabled:opacity-40" title="Remove">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Add key */}
+          <div className="mt-5 flex gap-2">
+            <input
+              type="text"
+              placeholder="Paste a new Serper API key (from a fresh free account)…"
+              value={newSerperKey}
+              onChange={(e) => { setNewSerperKey(e.target.value); setSerperError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') addSerperKey(); }}
+              className="flex-1 bg-black/80 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-transparent transition text-sm font-mono placeholder:text-white/15"
+            />
+            <button onClick={addSerperKey} disabled={serperBusy || !newSerperKey.trim()}
+              className="flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
+              <Plus className="w-4 h-4" /> Add
+            </button>
+          </div>
+          {serperError && <p className="mt-2 text-xs text-red-400">{serperError}</p>}
+          <div className="flex items-center gap-2 px-3 py-2 mt-3 rounded-lg bg-emerald-500/5 border border-emerald-500/10 text-[11px] text-emerald-200/60">
+            <Info className="w-3 h-3 text-emerald-400 shrink-0" />
+            Each free Serper account = 2,500 searches. When one exhausts, create another free account, paste its key here, and the engine keeps going — no restart needed.
+          </div>
+        </div>
+      </motion.section>
+
       {/* Save Button */}
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}

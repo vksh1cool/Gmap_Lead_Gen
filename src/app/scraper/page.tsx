@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, MapPin, Target, Download, Loader2, Mail, ExternalLink, Star, StarHalf, ShieldAlert, Key, Gem, Trophy, Trash2, Clock, Radio, CheckCircle2, Zap, ArrowRight, Activity } from 'lucide-react';
+import { Search, MapPin, Target, Download, Loader2, Mail, ExternalLink, Star, StarHalf, ShieldAlert, Key, Gem, Trophy, Trash2, Clock, Radio, CheckCircle2, Zap, ArrowRight, Activity, User } from 'lucide-react';
 import { ScoredLead } from '@/lib/types';
 
 /* ── Animation variants ── */
@@ -45,7 +45,7 @@ type Stage = 'idle' | 'connecting' | 'scraping' | 'analyzing' | 'saving' | 'comp
 
 const PIPELINE_STAGES: { key: Stage; label: string; icon: React.ReactNode }[] = [
   { key: 'connecting', label: 'Connecting', icon: <Radio className="w-4 h-4" /> },
-  { key: 'scraping', label: 'Scraping Maps', icon: <Search className="w-4 h-4" /> },
+  { key: 'scraping', label: 'Scraping', icon: <Search className="w-4 h-4" /> },
   { key: 'analyzing', label: 'AI Analysis', icon: <Zap className="w-4 h-4" /> },
   { key: 'saving', label: 'Saving', icon: <Download className="w-4 h-4" /> },
   { key: 'complete', label: 'Complete', icon: <CheckCircle2 className="w-4 h-4" /> },
@@ -54,6 +54,48 @@ const PIPELINE_STAGES: { key: Stage; label: string; icon: React.ReactNode }[] = 
 function getStageIndex(stage: Stage): number {
   const idx = PIPELINE_STAGES.findIndex((s) => s.key === stage);
   return idx === -1 ? -1 : idx;
+}
+
+/* ── Platform definitions ── */
+interface PlatformDef {
+  id: string;
+  label: string;
+  emoji: string;
+  color: string;        // tailwind border/bg color when selected
+  glowColor: string;    // shadow glow
+  tier: 'location' | 'social' | 'qa';
+}
+
+const PLATFORMS: PlatformDef[] = [
+  // Location-Based
+  { id: 'gmaps', label: 'Google Maps', emoji: '📍', color: 'border-emerald-400 bg-emerald-500/15 text-emerald-300', glowColor: 'shadow-emerald-500/25', tier: 'location' },
+  // Social & Forums
+  { id: 'reddit', label: 'Reddit', emoji: '🔶', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25', tier: 'social' },
+  { id: 'x', label: 'X / Twitter', emoji: '✕', color: 'border-gray-300 bg-white/10 text-gray-200', glowColor: 'shadow-white/15', tier: 'social' },
+  { id: 'linkedin', label: 'LinkedIn', emoji: '🔗', color: 'border-blue-400 bg-blue-500/15 text-blue-300', glowColor: 'shadow-blue-500/25', tier: 'social' },
+  { id: 'instagram', label: 'Instagram', emoji: '📸', color: 'border-pink-400 bg-pink-500/15 text-pink-300', glowColor: 'shadow-pink-500/25', tier: 'social' },
+  { id: 'hackernews', label: 'HackerNews', emoji: '🟧', color: 'border-orange-500 bg-orange-600/15 text-orange-400', glowColor: 'shadow-orange-600/25', tier: 'social' },
+  { id: 'devto', label: 'Dev.to', emoji: '⚡', color: 'border-indigo-400 bg-indigo-500/15 text-indigo-300', glowColor: 'shadow-indigo-500/25', tier: 'social' },
+  // Q&A & Jobs
+  { id: 'stackoverflow', label: 'StackOverflow', emoji: '📚', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25', tier: 'qa' },
+  { id: 'quora', label: 'Quora', emoji: '💬', color: 'border-red-400 bg-red-500/15 text-red-300', glowColor: 'shadow-red-500/25', tier: 'qa' },
+  { id: 'producthunt', label: 'ProductHunt', emoji: '🚀', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25', tier: 'qa' },
+  { id: 'upwork', label: 'Upwork', emoji: '💼', color: 'border-green-400 bg-green-500/15 text-green-300', glowColor: 'shadow-green-500/25', tier: 'qa' },
+];
+
+const TIER_LABELS: Record<string, { emoji: string; label: string }> = {
+  location: { emoji: '📍', label: 'Location-Based' },
+  social: { emoji: '💬', label: 'Social & Forums' },
+  qa: { emoji: '🔍', label: 'Q&A & Jobs' },
+};
+
+const SOCIAL_PLATFORMS = PLATFORMS.filter(p => p.tier !== 'location').map(p => p.id);
+
+/* ── Platform badge helper (used in lead cards) ── */
+function getPlatformBadge(platformId: string) {
+  const p = PLATFORMS.find(pl => pl.id === platformId);
+  if (!p) return { emoji: '🌐', label: platformId, colorClass: 'bg-gray-500/20 text-gray-300 border-gray-500/30' };
+  return { emoji: p.emoji, label: p.label, colorClass: `${p.color}` };
 }
 
 /* ── Elapsed timer hook ── */
@@ -93,6 +135,9 @@ function formatTime(seconds: number): string {
 }
 
 export default function Home() {
+  // ── Multi-platform state ──
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['gmaps']);
+  const [keyword, setKeyword] = useState('');
   const [niche, setNiche] = useState('');
   const [location, setLocation] = useState('');
   const [limit, setLimit] = useState<number>(10);
@@ -107,6 +152,12 @@ export default function Home() {
   const [stage, setStage] = useState<Stage>('idle');
   const [currentLeadName, setCurrentLeadName] = useState<string>('');
 
+  // ── Rate-limit notices (per platform) — drives the cooldown dialog ──
+  type RateLimitNotice = { platform: string; label: string; cooldown_minutes: number; message: string; until: number };
+  const [rateLimits, setRateLimits] = useState<Record<string, RateLimitNotice>>({});
+  const dismissRateLimit = (platform: string) =>
+    setRateLimits(prev => { const next = { ...prev }; delete next[platform]; return next; });
+
   // Elapsed timer
   const elapsed = useElapsedTimer(isScraping);
 
@@ -115,6 +166,28 @@ export default function Home() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
   const suggestionRef = useRef<HTMLDivElement>(null);
+
+  // Derived states
+  const hasGmaps = selectedPlatforms.includes('gmaps');
+  const hasSocial = selectedPlatforms.some(p => p !== 'gmaps');
+  const socialPlatforms = selectedPlatforms.filter(p => p !== 'gmaps');
+
+  // ── Platform toggle ──
+  const togglePlatform = (platformId: string) => {
+    setSelectedPlatforms(prev => {
+      if (prev.includes(platformId)) {
+        const next = prev.filter(p => p !== platformId);
+        return next.length === 0 ? prev : next; // don't allow empty
+      }
+      return [...prev, platformId];
+    });
+  };
+
+  // ── Quick-select helpers ──
+  const selectAll = () => setSelectedPlatforms(PLATFORMS.map(p => p.id));
+  const selectSocialOnly = () => setSelectedPlatforms(SOCIAL_PLATFORMS);
+  const selectMapsOnly = () => setSelectedPlatforms(['gmaps']);
+  const clearAll = () => setSelectedPlatforms(['gmaps']); // always keep at least one
 
   // Load API key and config from local storage on mount
   useEffect(() => {
@@ -174,10 +247,8 @@ export default function Home() {
   };
 
   const selectSuggestion = (name: string) => {
-    // Simplify "City, County, State, Country" to "City, State" if possible, or just use the first few parts
     const parts = name.split(',').map(p => p.trim());
     const simpleName = parts.length > 2 ? `${parts[0]}, ${parts[parts.length - 2]}` : name;
-    
     setLocation(simpleName);
     setShowSuggestions(false);
   };
@@ -204,9 +275,72 @@ export default function Home() {
     }
   }, []);
 
+  // ── Stream reader helper ──
+  const readStream = async (res: Response) => {
+    if (!res.body) throw new Error('No readable stream');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          deriveStage(parsed.type, parsed.message);
+
+          if (parsed.type === 'info') {
+            setProgress(parsed.message);
+          } else if (parsed.type === 'raw') {
+            setProgress(`Found ${parsed.data.name}, analyzing with AI...`);
+            setCurrentLeadName(parsed.data.name);
+            setLeads((prev) => {
+              const exists = prev.find(l => l.id === parsed.data.id);
+              if (exists) return prev;
+              return [...prev, { ...parsed.data, lead_score: 0, rationale: 'Analyzing...', suggested_pitch: '' }];
+            });
+          } else if (parsed.type === 'scored') {
+            setProgress(`AI Analyzed: ${parsed.data.name}`);
+            setCurrentLeadName(parsed.data.name);
+            setLeads((prev) => prev.map(l => l.id === parsed.data.id ? parsed.data : l));
+          } else if (parsed.type === 'done') {
+            setProgress('Scraping complete!');
+          } else if (parsed.type === 'rate_limited') {
+            // A platform hit a search rate-limit — pop the cooldown dialog and
+            // stop hitting it. Protects the IP from a ban.
+            setRateLimits((prev) => ({
+              ...prev,
+              [parsed.platform]: {
+                platform: parsed.platform,
+                label: parsed.label || parsed.platform,
+                cooldown_minutes: parsed.cooldown_minutes || 15,
+                message: parsed.message || '',
+                until: Date.now() + (parsed.cooldown_seconds || 900) * 1000,
+              },
+            }));
+            setProgress(`${parsed.label || parsed.platform} rate-limited — paused ~${parsed.cooldown_minutes || 15} min`);
+          } else if (parsed.type === 'error') {
+            setProgress(`Error: ${parsed.message}`);
+          }
+        } catch (err) {
+          console.error('Error parsing NDJSON line:', line, err);
+        }
+      }
+    }
+  };
+
   const handleScrape = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!niche || !location) return;
+    if (hasGmaps && (!niche || !location)) return;
+    if (hasSocial && !keyword) return;
+    if (selectedPlatforms.length === 0) return;
 
     setIsScraping(true);
     setLeads([]);
@@ -215,59 +349,43 @@ export default function Home() {
     setCurrentLeadName('');
 
     try {
-      const res = await fetch('/api/scrape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ niche, location, limit, apiKey, aiProvider, aiModel }),
-      });
+      const requests: Promise<void>[] = [];
 
-      if (!res.body) throw new Error('No readable stream');
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const parsed = JSON.parse(line);
-            deriveStage(parsed.type, parsed.message);
-
-            if (parsed.type === 'info') {
-              setProgress(parsed.message);
-            } else if (parsed.type === 'raw') {
-              setProgress(`Found ${parsed.data.name}, analyzing with AI...`);
-              setCurrentLeadName(parsed.data.name);
-              setLeads((prev) => {
-                const exists = prev.find(l => l.id === parsed.data.id);
-                if (exists) return prev;
-                return [...prev, { ...parsed.data, lead_score: 0, rationale: 'Analyzing...', suggested_pitch: '' }];
-              });
-            } else if (parsed.type === 'scored') {
-              setProgress(`AI Analyzed: ${parsed.data.name}`);
-              setCurrentLeadName(parsed.data.name);
-              setLeads((prev) => prev.map(l => l.id === parsed.data.id ? parsed.data : l));
-            } else if (parsed.type === 'done') {
-              setProgress('Scraping complete!');
-              setIsScraping(false);
-              setCurrentLeadName('');
-            } else if (parsed.type === 'error') {
-              setProgress(`Error: ${parsed.message}`);
-              setIsScraping(false);
-              setCurrentLeadName('');
-            }
-          } catch (err) {
-            console.error('Error parsing NDJSON line:', line, err);
-          }
-        }
+      // Fire gmaps request if selected
+      if (hasGmaps) {
+        const gmapsPayload = { platform: 'gmaps', niche, location, limit, apiKey, aiProvider, aiModel };
+        const gmapsReq = fetch('/api/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(gmapsPayload),
+        }).then(res => readStream(res));
+        requests.push(gmapsReq);
       }
+
+      // Fire social request if any social platforms selected
+      if (hasSocial) {
+        const socialPayload = {
+          platform: socialPlatforms.length === 1 ? socialPlatforms[0] : 'all',
+          platforms: socialPlatforms.join(','),
+          keyword,
+          limit,
+          apiKey,
+          aiProvider,
+          aiModel,
+        };
+        const socialReq = fetch('/api/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(socialPayload),
+        }).then(res => readStream(res));
+        requests.push(socialReq);
+      }
+
+      await Promise.all(requests);
+      setStage('complete');
+      setProgress('Scraping complete!');
+      setIsScraping(false);
+      setCurrentLeadName('');
     } catch (error: any) {
       console.error(error);
       setProgress(`Failed: ${error.message}`);
@@ -282,6 +400,7 @@ export default function Home() {
     try {
       const csvData = leads.map(l => ({
         Name: l.name,
+        Platform: l.platform || 'gmaps',
         Score: l.lead_score,
         Category: l.lead_category || '',
         Business_Category: l.category || '',
@@ -290,6 +409,9 @@ export default function Home() {
         Phone: l.phone || '',
         Website: l.website || '',
         Emails: l.emails_found?.join(', ') || '',
+        Author: l.author || '',
+        Post_URL: l.post_url || '',
+        Title: l.title || '',
         Pitch: l.suggested_pitch || '',
         Rationale: l.rationale || '',
       }));
@@ -312,7 +434,7 @@ export default function Home() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${niche}-${location}-leads.csv`.replace(/\s+/g, '_');
+      a.download = `leads-${selectedPlatforms.join('-')}-${Date.now()}.csv`.replace(/\s+/g, '_');
       a.click();
     } catch (err) {
       console.error(err);
@@ -325,6 +447,54 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#0A0A0A] text-white p-8 font-sans selection:bg-indigo-500/30">
+      {/* ── Rate-limit cooldown dialog ── */}
+      <AnimatePresence>
+        {Object.keys(rateLimits).length > 0 && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setRateLimits({})}
+          >
+            <motion.div
+              className="w-full max-w-md rounded-2xl border border-amber-500/30 bg-[#141414] p-6 shadow-2xl shadow-amber-500/10"
+              initial={{ scale: 0.92, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.92, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-500/15">
+                  <ShieldAlert className="h-6 w-6 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Rate limit reached</h3>
+                  <p className="text-xs text-gray-400">Pausing affected platforms to protect your IP</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {Object.values(rateLimits).map((rl) => (
+                  <div key={rl.platform} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="flex items-center gap-2 text-sm font-medium text-amber-300">
+                        <Clock className="h-4 w-4" /> {rl.label}
+                      </span>
+                      <span className="text-xs text-gray-500">~{rl.cooldown_minutes} min cooldown</span>
+                    </div>
+                    <p className="text-xs leading-relaxed text-gray-400">{rl.message}</p>
+                    <button onClick={() => dismissRateLimit(rl.platform)}
+                      className="mt-2 text-xs font-medium text-indigo-400 hover:text-indigo-300">
+                      Dismiss
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setRateLimits({})}
+                className="mt-5 w-full rounded-xl bg-white/10 py-2.5 text-sm font-medium text-white hover:bg-white/15 transition">
+                Got it
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <motion.div
         className="max-w-7xl mx-auto space-y-8"
         variants={containerVariants}
@@ -339,9 +509,9 @@ export default function Home() {
         >
           <div className="space-y-2">
             <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-cyan-400 to-emerald-400 bg-clip-text text-transparent">
-              GMaps Lead Machine
+              LaunchPixel Lead Engine
             </h1>
-            <p className="text-gray-400 text-sm">Find, analyze, and extract high-intent B2B leads.</p>
+            <p className="text-gray-400 text-sm">Multi-platform buyer-intent lead generation — Maps, Social, Forums & Jobs.</p>
           </div>
           <AnimatePresence>
             {leads.length > 0 && (
@@ -352,6 +522,7 @@ export default function Home() {
                 className="flex items-center gap-3"
               >
                 <button
+                  id="btn-export-csv"
                   onClick={exportCSV}
                   className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-full transition-all text-sm font-medium backdrop-blur-sm"
                 >
@@ -362,7 +533,7 @@ export default function Home() {
           </AnimatePresence>
         </motion.header>
 
-        {/* Form Container — animated gradient border — NO overflow-hidden */}
+        {/* Form Container — animated gradient border */}
         <motion.section
           variants={itemVariants}
           className="animated-gradient-border bg-white/[0.03] p-6 rounded-2xl backdrop-blur-xl shadow-2xl space-y-6 relative"
@@ -378,124 +549,295 @@ export default function Home() {
             </span>
           </div>
 
+          {/* ── Quick-select Buttons ── */}
+          <motion.div variants={itemVariants} className="relative z-10 flex flex-wrap gap-2">
+            <button
+              id="btn-select-all"
+              type="button"
+              onClick={selectAll}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all"
+            >
+              ✦ Select All
+            </button>
+            <button
+              id="btn-social-only"
+              type="button"
+              onClick={selectSocialOnly}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all"
+            >
+              💬 Social Only
+            </button>
+            <button
+              id="btn-maps-only"
+              type="button"
+              onClick={selectMapsOnly}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all"
+            >
+              📍 Maps Only
+            </button>
+            <button
+              id="btn-clear-all"
+              type="button"
+              onClick={clearAll}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 text-red-400/70 hover:text-red-400 transition-all"
+            >
+              ✕ Clear
+            </button>
+            <div className="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500">
+              <span className="tabular-nums font-mono">{selectedPlatforms.length}</span>
+              <span>platform{selectedPlatforms.length !== 1 ? 's' : ''} selected</span>
+            </div>
+          </motion.div>
+
+          {/* ── Multi-Platform Selector Grid ── */}
+          <motion.div variants={itemVariants} className="relative z-10 space-y-4">
+            {(['location', 'social', 'qa'] as const).map(tier => {
+              const tierInfo = TIER_LABELS[tier];
+              const tierPlatforms = PLATFORMS.filter(p => p.tier === tier);
+              return (
+                <div key={tier}>
+                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-2">
+                    {tierInfo.emoji} {tierInfo.label}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {tierPlatforms.map(platform => {
+                      const isSelected = selectedPlatforms.includes(platform.id);
+                      return (
+                        <motion.button
+                          key={platform.id}
+                          id={`platform-toggle-${platform.id}`}
+                          type="button"
+                          onClick={() => togglePlatform(platform.id)}
+                          whileTap={{ scale: 0.95 }}
+                          className={`
+                            relative px-4 py-2.5 rounded-xl text-sm font-semibold border transition-all duration-300 cursor-pointer select-none
+                            flex items-center gap-2
+                            ${isSelected
+                              ? `${platform.color} ${platform.glowColor} shadow-lg`
+                              : 'border-white/[0.08] bg-white/[0.03] text-gray-500 hover:bg-white/[0.06] hover:border-white/[0.15] hover:text-gray-300'
+                            }
+                          `}
+                        >
+                          {/* Active glow ring */}
+                          {isSelected && (
+                            <motion.span
+                              layoutId={`glow-${platform.id}`}
+                              className="absolute inset-0 rounded-xl border border-current opacity-30"
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 0.3 }}
+                              exit={{ opacity: 0 }}
+                              transition={{ duration: 0.3 }}
+                            />
+                          )}
+                          <span className="text-base leading-none">{platform.emoji}</span>
+                          <span className="relative z-10">{platform.label}</span>
+                          {/* Custom checkbox indicator */}
+                          <span className={`
+                            w-4 h-4 rounded-md border-2 flex items-center justify-center transition-all duration-200 ml-1
+                            ${isSelected
+                              ? 'border-current bg-current/20'
+                              : 'border-white/20 bg-transparent'
+                            }
+                          `}>
+                            <AnimatePresence>
+                              {isSelected && (
+                                <motion.svg
+                                  initial={{ scale: 0, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ scale: 0, opacity: 0 }}
+                                  transition={{ duration: 0.15 }}
+                                  className="w-2.5 h-2.5 text-white"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={4}
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </motion.svg>
+                              )}
+                            </AnimatePresence>
+                          </span>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </motion.div>
+
+          {/* ── Dynamic Input Fields ── */}
           <motion.form
             onSubmit={handleScrape}
-            className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end relative z-10"
+            className="space-y-4 relative z-10"
             variants={containerVariants}
             initial="hidden"
             animate="visible"
           >
-            {/* Niche Field */}
-            <motion.div variants={itemVariants} className="space-y-3 relative">
-              <label className="text-xs font-semibold text-indigo-200 uppercase tracking-wider flex items-center gap-2">
-                <Target className="w-3 h-3" /> Niche
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Plumbers, Roofers..."
-                value={niche}
-                onChange={(e) => setNiche(e.target.value)}
-                className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
-                required
-              />
-            </motion.div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              {/* Niche + Location — shown when gmaps is selected */}
+              <AnimatePresence mode="popLayout">
+                {hasGmaps && (
+                  <>
+                    <motion.div
+                      key="field-niche"
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                      transition={{ duration: 0.3 }}
+                      className="space-y-3 relative"
+                    >
+                      <label className="text-xs font-semibold text-indigo-200 uppercase tracking-wider flex items-center gap-2">
+                        <Target className="w-3 h-3" /> Niche
+                      </label>
+                      <input
+                        id="input-niche"
+                        type="text"
+                        placeholder="e.g. Plumbers, Roofers..."
+                        value={niche}
+                        onChange={(e) => setNiche(e.target.value)}
+                        className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+                        required={hasGmaps}
+                      />
+                    </motion.div>
 
-            {/* Location Field */}
-            <motion.div variants={itemVariants} className="space-y-3 relative" ref={suggestionRef}>
-              <label className="text-xs font-semibold text-cyan-200 uppercase tracking-wider flex items-center gap-2">
-                <MapPin className="w-3 h-3" /> Location
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Austin, TX"
-                value={location}
-                onChange={handleLocationChange}
-                onFocus={() => { if (location.length >= 3) setShowSuggestions(true); }}
-                className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
-                required
-                autoComplete="off"
-              />
-              
-              {/* Autocomplete Dropdown */}
-              <AnimatePresence>
-                {showSuggestions && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.2 }}
-                    className="absolute z-50 w-full mt-1 bg-gray-900/95 border border-white/10 rounded-xl shadow-2xl overflow-hidden backdrop-blur-xl"
-                  >
-                    {isSearchingLocation ? (
-                      <div className="p-4 text-center text-gray-400 text-sm flex items-center justify-center gap-2">
-                        <Loader2 className="w-4 h-4 animate-spin" /> Searching places...
-                      </div>
-                    ) : suggestions.length > 0 ? (
-                      <ul className="max-h-60 overflow-y-auto">
-                        {suggestions.map((s, i) => (
-                          <li 
-                            key={i} 
-                            onClick={() => selectSuggestion(s.display_name)}
-                            className="px-4 py-3 text-sm text-gray-300 hover:bg-white/10 cursor-pointer border-b border-white/5 last:border-0 transition-colors flex items-start gap-2"
+                    <motion.div
+                      key="field-location"
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                      transition={{ duration: 0.3, delay: 0.05 }}
+                      className="space-y-3 relative"
+                      ref={suggestionRef}
+                    >
+                      <label className="text-xs font-semibold text-cyan-200 uppercase tracking-wider flex items-center gap-2">
+                        <MapPin className="w-3 h-3" /> Location
+                      </label>
+                      <input
+                        id="input-location"
+                        type="text"
+                        placeholder="e.g. Austin, TX"
+                        value={location}
+                        onChange={handleLocationChange}
+                        onFocus={() => { if (location.length >= 3) setShowSuggestions(true); }}
+                        className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+                        required={hasGmaps}
+                        autoComplete="off"
+                      />
+                      
+                      {/* Autocomplete Dropdown */}
+                      <AnimatePresence>
+                        {showSuggestions && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -8 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -8 }}
+                            transition={{ duration: 0.2 }}
+                            className="absolute z-50 w-full mt-1 bg-gray-900/95 border border-white/10 rounded-xl shadow-2xl overflow-hidden backdrop-blur-xl"
                           >
-                            <MapPin className="w-4 h-4 shrink-0 mt-0.5 text-cyan-500" />
-                            <span>{s.display_name}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : location.length >= 3 ? (
-                      <div className="p-4 text-center text-gray-500 text-sm">
-                        No matching locations found.
-                      </div>
-                    ) : null}
+                            {isSearchingLocation ? (
+                              <div className="p-4 text-center text-gray-400 text-sm flex items-center justify-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" /> Searching places...
+                              </div>
+                            ) : suggestions.length > 0 ? (
+                              <ul className="max-h-60 overflow-y-auto">
+                                {suggestions.map((s, i) => (
+                                  <li 
+                                    key={i} 
+                                    onClick={() => selectSuggestion(s.display_name)}
+                                    className="px-4 py-3 text-sm text-gray-300 hover:bg-white/10 cursor-pointer border-b border-white/5 last:border-0 transition-colors flex items-start gap-2"
+                                  >
+                                    <MapPin className="w-4 h-4 shrink-0 mt-0.5 text-cyan-500" />
+                                    <span>{s.display_name}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : location.length >= 3 ? (
+                              <div className="p-4 text-center text-gray-500 text-sm">
+                                No matching locations found.
+                              </div>
+                            ) : null}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+
+              {/* Keyword — shown when any social platform is selected */}
+              <AnimatePresence mode="popLayout">
+                {hasSocial && (
+                  <motion.div
+                    key="field-keyword"
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                    transition={{ duration: 0.3 }}
+                    className={`space-y-3 relative ${hasGmaps ? '' : 'col-span-2'}`}
+                  >
+                    <label className="text-xs font-semibold text-purple-200 uppercase tracking-wider flex items-center gap-2">
+                      <Search className="w-3 h-3" /> Keyword / Intent
+                    </label>
+                    <input
+                      id="input-keyword"
+                      type="text"
+                      placeholder='"need a web developer", "looking for an agency"'
+                      value={keyword}
+                      onChange={(e) => setKeyword(e.target.value)}
+                      className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+                      required={hasSocial}
+                    />
                   </motion.div>
                 )}
               </AnimatePresence>
-            </motion.div>
 
-            {/* Max Leads Field */}
-            <motion.div variants={itemVariants} className="space-y-3">
-              <label className="text-xs font-semibold text-purple-200 uppercase tracking-wider flex items-center gap-2">
-                <Star className="w-3 h-3" /> Max Leads
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="200"
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value))}
-                className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
-                required
-              />
-            </motion.div>
+              {/* Max Leads Field */}
+              <motion.div variants={itemVariants} className="space-y-3">
+                <label className="text-xs font-semibold text-purple-200 uppercase tracking-wider flex items-center gap-2">
+                  <Star className="w-3 h-3" /> Max Leads
+                </label>
+                <input
+                  id="input-limit"
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={limit}
+                  onChange={(e) => setLimit(Number(e.target.value))}
+                  className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+                  required
+                />
+              </motion.div>
 
-            {/* Run Engine Button */}
-            <motion.div variants={itemVariants}>
-              <button
-                type="submit"
-                disabled={isScraping}
-                className={`
-                  w-full h-[46px] rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white relative overflow-hidden
-                  ${isScraping
-                    ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 btn-pulse cursor-wait'
-                    : 'bg-gradient-to-r from-indigo-600 via-indigo-500 to-cyan-600 hover:shadow-lg hover:shadow-indigo-500/25 hover:scale-[1.02] active:scale-[0.98]'
-                  }
-                  disabled:opacity-70
-                `}
-              >
-                {/* Shimmer overlay on hover */}
-                {!isScraping && (
-                  <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-200%] hover:translate-x-[200%] transition-transform duration-700" />
-                )}
-                <span className="relative z-10 flex items-center gap-2">
-                  {isScraping ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Scraping...</>
-                  ) : (
-                    <><Search className="w-4 h-4" /> Run Engine</>
+              {/* Run Engine Button */}
+              <motion.div variants={itemVariants}>
+                <button
+                  id="btn-run-engine"
+                  type="submit"
+                  disabled={isScraping}
+                  className={`
+                    w-full h-[46px] rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white relative overflow-hidden
+                    ${isScraping
+                      ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 btn-pulse cursor-wait'
+                      : 'bg-gradient-to-r from-indigo-600 via-indigo-500 to-cyan-600 hover:shadow-lg hover:shadow-indigo-500/25 hover:scale-[1.02] active:scale-[0.98]'
+                    }
+                    disabled:opacity-70
+                  `}
+                >
+                  {/* Shimmer overlay on hover */}
+                  {!isScraping && (
+                    <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-200%] hover:translate-x-[200%] transition-transform duration-700" />
                   )}
-                </span>
-              </button>
-            </motion.div>
+                  <span className="relative z-10 flex items-center gap-2">
+                    {isScraping ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Scraping...</>
+                    ) : (
+                      <><Search className="w-4 h-4" /> Run Engine</>
+                    )}
+                  </span>
+                </button>
+              </motion.div>
+            </div>
           </motion.form>
         </motion.section>
 
@@ -702,118 +1044,163 @@ export default function Home() {
                 animate="visible"
               >
                 <AnimatePresence mode="popLayout">
-                  {leads.map((lead) => (
-                    <motion.div
-                      key={lead.id}
-                      variants={cardVariants}
-                      initial="hidden"
-                      animate="visible"
-                      exit="exit"
-                      layout
-                      className={`
-                        group
-                        bg-white/[0.04] backdrop-blur-md
-                        border border-white/[0.08]
-                        rounded-2xl p-6
-                        transition-all duration-300 ease-out
-                        shadow-lg
-                        hover:bg-white/[0.07]
-                        hover:border-white/[0.18]
-                        hover:shadow-indigo-500/10 hover:shadow-xl
-                        hover:scale-[1.005]
-                        flex flex-col md:flex-row gap-6
-                      `}
-                    >
-                      
-                      {/* Left Column: Basic Info */}
-                      <div className="flex-1 space-y-3">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h3 className="text-xl font-bold flex items-center gap-2">
-                              {lead.name}
-                              {!lead.website && (
-                                <span className="px-2 py-0.5 text-[10px] uppercase font-bold bg-red-500/20 text-red-400 rounded-full flex items-center gap-1 border border-red-500/30">
-                                  <ShieldAlert className="w-3 h-3" /> No Website
+                  {leads.map((lead) => {
+                    const badge = getPlatformBadge(lead.platform || 'gmaps');
+                    const isSocialLead = lead.platform && lead.platform !== 'gmaps';
+                    const isJobLead = lead.kind === 'job' || lead.platform === 'upwork';
+
+                    return (
+                      <motion.div
+                        key={lead.id}
+                        variants={cardVariants}
+                        initial="hidden"
+                        animate="visible"
+                        exit="exit"
+                        layout
+                        className={`
+                          group
+                          bg-white/[0.04] backdrop-blur-md
+                          border border-white/[0.08]
+                          rounded-2xl p-6
+                          transition-all duration-300 ease-out
+                          shadow-lg
+                          hover:bg-white/[0.07]
+                          hover:border-white/[0.18]
+                          hover:shadow-indigo-500/10 hover:shadow-xl
+                          hover:scale-[1.005]
+                          flex flex-col md:flex-row gap-6
+                        `}
+                      >
+                        
+                        {/* Left Column: Basic Info */}
+                        <div className="flex-1 space-y-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <h3 className="text-xl font-bold flex items-center gap-2 flex-wrap">
+                                {/* Platform Badge */}
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase font-bold rounded-full border ${badge.colorClass}`}>
+                                  {badge.emoji} {badge.label}
                                 </span>
+                                {lead.title || lead.name}
+                                {!lead.website && !isSocialLead && (
+                                  <span className="px-2 py-0.5 text-[10px] uppercase font-bold bg-red-500/20 text-red-400 rounded-full flex items-center gap-1 border border-red-500/30">
+                                    <ShieldAlert className="w-3 h-3" /> No Website
+                                  </span>
+                                )}
+                                {lead.is_claimed === false && (
+                                  <span className="px-2 py-0.5 text-[10px] uppercase font-bold bg-purple-500/20 text-purple-400 rounded-full flex items-center gap-1 border border-purple-500/30">
+                                    <Target className="w-3 h-3" /> Unclaimed
+                                  </span>
+                                )}
+                              </h3>
+                              
+                              {/* Maps lead: address */}
+                              {!isSocialLead && lead.address && (
+                                <p className="text-gray-400 text-sm mt-1">{lead.address}</p>
                               )}
-                              {lead.is_claimed === false && (
-                                <span className="px-2 py-0.5 text-[10px] uppercase font-bold bg-purple-500/20 text-purple-400 rounded-full flex items-center gap-1 border border-purple-500/30">
-                                  <Target className="w-3 h-3" /> Unclaimed
-                                </span>
+
+                              {/* Social / Job lead: author & content preview */}
+                              {isSocialLead && (
+                                <div className="mt-2 space-y-1.5">
+                                  {lead.author && (
+                                    <p className="text-sm text-gray-400 flex items-center gap-1.5">
+                                      <User className="w-3.5 h-3.5 text-gray-500" />
+                                      <span className="font-medium text-gray-300">@{lead.author}</span>
+                                    </p>
+                                  )}
+                                  {lead.post_content && (
+                                    <p className="text-sm text-gray-400 leading-relaxed line-clamp-3 bg-white/[0.03] rounded-lg p-3 border border-white/[0.05]">
+                                      {lead.post_content.slice(0, 200)}{lead.post_content.length > 200 ? '…' : ''}
+                                    </p>
+                                  )}
+                                </div>
                               )}
-                            </h3>
-                            <p className="text-gray-400 text-sm mt-1">{lead.address}</p>
+                            </div>
+                            
+                            {/* Score Badge */}
+                            <div className={`
+                              flex flex-col items-center justify-center w-20 h-20 rounded-xl shrink-0 gap-1 p-2
+                              bg-black/50 backdrop-blur-sm
+                              border transition-all duration-500
+                              ${lead.lead_category === 'Diamond'
+                                ? 'border-cyan-400/50 bg-gradient-to-br from-cyan-500/20 to-indigo-500/20 shadow-[0_0_25px_rgba(34,211,238,0.25)]'
+                                : lead.lead_category === 'Gold'
+                                  ? 'border-yellow-500/40 bg-gradient-to-br from-yellow-500/10 to-orange-500/10 shadow-[0_0_15px_rgba(234,179,8,0.2)]'
+                                  : 'border-white/10'
+                              }
+                            `}>
+                              <span className={`text-2xl font-bold ${lead.lead_score >= 8 ? 'text-green-400' : lead.lead_score >= 5 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                {lead.lead_score || '-'}
+                              </span>
+                              {lead.lead_category === 'Diamond' && <span className="text-[10px] font-bold uppercase text-cyan-300 flex items-center gap-1"><Gem className="w-3 h-3"/> Diamond</span>}
+                              {lead.lead_category === 'Gold' && <span className="text-[10px] font-bold uppercase text-yellow-500 flex items-center gap-1"><Trophy className="w-3 h-3"/> Gold</span>}
+                              {lead.lead_category === 'Junk' && <span className="text-[10px] font-bold uppercase text-gray-500 flex items-center gap-1"><Trash2 className="w-3 h-3"/> Junk</span>}
+                            </div>
                           </div>
-                          
-                          {/* Score Badge */}
-                          <div className={`
-                            flex flex-col items-center justify-center w-20 h-20 rounded-xl shrink-0 gap-1 p-2
-                            bg-black/50 backdrop-blur-sm
-                            border transition-all duration-500
-                            ${lead.lead_category === 'Diamond'
-                              ? 'border-cyan-400/50 bg-gradient-to-br from-cyan-500/20 to-indigo-500/20 shadow-[0_0_25px_rgba(34,211,238,0.25)]'
-                              : lead.lead_category === 'Gold'
-                                ? 'border-yellow-500/40 bg-gradient-to-br from-yellow-500/10 to-orange-500/10 shadow-[0_0_15px_rgba(234,179,8,0.2)]'
-                                : 'border-white/10'
-                            }
-                          `}>
-                            <span className={`text-2xl font-bold ${lead.lead_score >= 8 ? 'text-green-400' : lead.lead_score >= 5 ? 'text-yellow-400' : 'text-red-400'}`}>
-                              {lead.lead_score || '-'}
-                            </span>
-                            {lead.lead_category === 'Diamond' && <span className="text-[10px] font-bold uppercase text-cyan-300 flex items-center gap-1"><Gem className="w-3 h-3"/> Diamond</span>}
-                            {lead.lead_category === 'Gold' && <span className="text-[10px] font-bold uppercase text-yellow-500 flex items-center gap-1"><Trophy className="w-3 h-3"/> Gold</span>}
-                            {lead.lead_category === 'Junk' && <span className="text-[10px] font-bold uppercase text-gray-500 flex items-center gap-1"><Trash2 className="w-3 h-3"/> Junk</span>}
+
+                          <div className="flex flex-wrap items-center gap-3 text-sm text-gray-300">
+                            {/* Maps-specific info */}
+                            {!isSocialLead && lead.rating && (
+                              <div className="flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-md border border-white/10">
+                                <Star className="w-3.5 h-3.5 text-yellow-500 fill-yellow-500" />
+                                <span className="font-medium text-white">{lead.rating}</span>
+                                <span className="text-gray-500 ml-1">({lead.reviews})</span>
+                              </div>
+                            )}
+                            {lead.phone && (
+                              <div className="bg-white/5 px-2.5 py-1 rounded-md border border-white/10">
+                                {lead.phone}
+                              </div>
+                            )}
+                            {lead.website && (
+                              <a href={lead.website} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-md border border-white/10 text-cyan-400 transition-colors">
+                                <ExternalLink className="w-3.5 h-3.5" /> Website
+                              </a>
+                            )}
+                            {/* Social lead: View Original Post */}
+                            {isSocialLead && lead.post_url && (
+                              <a
+                                id={`view-post-${lead.id}`}
+                                href={lead.post_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1.5 bg-indigo-500/15 hover:bg-indigo-500/25 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-indigo-300 font-semibold text-xs transition-all hover:shadow-lg hover:shadow-indigo-500/10"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                {isJobLead ? 'View Job' : 'View Original Post'}
+                              </a>
+                            )}
+                            {lead.emails_found && lead.emails_found.length > 0 && (
+                              <div className="flex items-center gap-1 bg-indigo-500/20 px-2.5 py-1 rounded-md border border-indigo-500/30 text-indigo-300">
+                                <Mail className="w-3.5 h-3.5" /> {lead.emails_found[0]}
+                              </div>
+                            )}
+                            {lead.socials && lead.socials.length > 0 && lead.socials.map((social, idx) => (
+                              <a key={idx} href={social} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-blue-500/20 hover:bg-blue-500/30 px-2.5 py-1 rounded-md border border-blue-500/30 text-blue-300 transition-colors">
+                                <ExternalLink className="w-3 h-3" /> {new URL(social).hostname.replace('www.', '')}
+                              </a>
+                            ))}
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-3 text-sm text-gray-300">
-                          {lead.rating && (
-                            <div className="flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-md border border-white/10">
-                              <Star className="w-3.5 h-3.5 text-yellow-500 fill-yellow-500" />
-                              <span className="font-medium text-white">{lead.rating}</span>
-                              <span className="text-gray-500 ml-1">({lead.reviews})</span>
-                            </div>
-                          )}
-                          {lead.phone && (
-                            <div className="bg-white/5 px-2.5 py-1 rounded-md border border-white/10">
-                              {lead.phone}
-                            </div>
-                          )}
-                          {lead.website && (
-                            <a href={lead.website} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-white/5 hover:bg-white/10 px-2.5 py-1 rounded-md border border-white/10 text-cyan-400 transition-colors">
-                              <ExternalLink className="w-3.5 h-3.5" /> Website
-                            </a>
-                          )}
-                          {lead.emails_found && lead.emails_found.length > 0 && (
-                            <div className="flex items-center gap-1 bg-indigo-500/20 px-2.5 py-1 rounded-md border border-indigo-500/30 text-indigo-300">
-                              <Mail className="w-3.5 h-3.5" /> {lead.emails_found[0]}
-                            </div>
-                          )}
-                          {lead.socials && lead.socials.length > 0 && lead.socials.map((social, idx) => (
-                            <a key={idx} href={social} target="_blank" rel="noreferrer" className="flex items-center gap-1 bg-blue-500/20 hover:bg-blue-500/30 px-2.5 py-1 rounded-md border border-blue-500/30 text-blue-300 transition-colors">
-                              <ExternalLink className="w-3 h-3" /> {new URL(social).hostname.replace('www.', '')}
-                            </a>
-                          ))}
+                        {/* Right Column: AI Analysis */}
+                        <div className="flex-1 bg-gradient-to-br from-white/[0.03] to-white/[0.01] backdrop-blur-sm border border-white/5 rounded-xl p-5 space-y-4 relative overflow-hidden group-hover:border-white/10 transition-all duration-500">
+                          <div className="absolute -top-6 -right-6 p-3 opacity-[0.03] text-indigo-500 group-hover:scale-110 group-hover:rotate-12 transition-transform duration-700">
+                            <Zap className="w-40 h-40" />
+                          </div>
+                          <div className="relative z-10 border-l-2 border-indigo-500/50 pl-4">
+                            <h4 className="text-[11px] font-bold text-indigo-400 uppercase tracking-widest mb-1.5 flex items-center gap-2"><Target className="w-3 h-3"/> AI Rationale</h4>
+                            <p className="text-sm text-gray-300 leading-relaxed">{lead.rationale || 'Awaiting analysis...'}</p>
+                          </div>
+                          <div className="relative z-10 border-l-2 border-cyan-500/50 pl-4 pt-1 mt-4">
+                            <h4 className="text-[11px] font-bold text-cyan-400 uppercase tracking-widest mb-2 flex items-center gap-2"><Mail className="w-3 h-3"/> Suggested Pitch</h4>
+                            <p className="text-sm text-white font-medium italic bg-white/5 p-3.5 rounded-lg border border-white/10 shadow-inner leading-relaxed">"{lead.suggested_pitch || '...'}"</p>
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Right Column: AI Analysis */}
-                      <div className="flex-1 bg-gradient-to-br from-white/[0.03] to-white/[0.01] backdrop-blur-sm border border-white/5 rounded-xl p-5 space-y-4 relative overflow-hidden group-hover:border-white/10 transition-all duration-500">
-                        <div className="absolute -top-6 -right-6 p-3 opacity-[0.03] text-indigo-500 group-hover:scale-110 group-hover:rotate-12 transition-transform duration-700">
-                          <Zap className="w-40 h-40" />
-                        </div>
-                        <div className="relative z-10 border-l-2 border-indigo-500/50 pl-4">
-                          <h4 className="text-[11px] font-bold text-indigo-400 uppercase tracking-widest mb-1.5 flex items-center gap-2"><Target className="w-3 h-3"/> AI Rationale</h4>
-                          <p className="text-sm text-gray-300 leading-relaxed">{lead.rationale || 'Awaiting analysis...'}</p>
-                        </div>
-                        <div className="relative z-10 border-l-2 border-cyan-500/50 pl-4 pt-1 mt-4">
-                          <h4 className="text-[11px] font-bold text-cyan-400 uppercase tracking-widest mb-2 flex items-center gap-2"><Mail className="w-3 h-3"/> Suggested Pitch</h4>
-                          <p className="text-sm text-white font-medium italic bg-white/5 p-3.5 rounded-lg border border-white/10 shadow-inner leading-relaxed">"{lead.suggested_pitch || '...'}"</p>
-                        </div>
-                      </div>
-
-                    </motion.div>
-                  ))}
+                      </motion.div>
+                    );
+                  })}
                 </AnimatePresence>
               </motion.div>
             </motion.div>

@@ -34,3 +34,4 @@ curl_out.json
 .env*.local
 .env
 leads.json
+python_engine/serper_keys.json

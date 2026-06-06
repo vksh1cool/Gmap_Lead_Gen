@@ -55,6 +55,17 @@ interface Lead {
   search_query?: string;
   scraped_at?: string;
   address?: string;
+  platform?: string;
+  kind?: string;
+  author?: string;
+  author_url?: string;
+  post_url?: string;
+  post_content?: string;
+  title?: string;
+  matched_keyword?: string;
+  pain_point?: string;
+  posted_at?: string;
+  external_id?: string;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -69,6 +80,7 @@ export default function CRMPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [platformFilter, setPlatformFilter] = useState("All");
 
   useEffect(() => {
     fetchLeads();
@@ -136,9 +148,21 @@ export default function CRMPage() {
   const filteredLeads = leads.filter(lead => {
     const matchesSearch = lead.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           (lead.about_snippet || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (lead.post_content || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (lead.title || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
                           (lead.search_query || "").toLowerCase().includes(searchQuery.toLowerCase());
     const matchesStatus = statusFilter === "All" || lead.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    
+    let matchesPlatform = true;
+    if (platformFilter === "Maps") {
+      matchesPlatform = !lead.platform || lead.platform === "gmaps";
+    } else if (platformFilter === "Social") {
+      matchesPlatform = lead.platform !== "gmaps" && lead.kind !== "job";
+    } else if (platformFilter === "Jobs") {
+      matchesPlatform = lead.kind === "job" || lead.platform === "upwork";
+    }
+
+    return matchesSearch && matchesStatus && matchesPlatform;
   });
 
   // Group leads by batch_id
@@ -190,7 +214,22 @@ export default function CRMPage() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
-        <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
+        <div className="flex gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar items-center">
+          <div className="flex bg-black/40 rounded-xl p-1 border border-white/10 mr-2">
+            {["All", "Maps", "Social", "Jobs"].map(platform => (
+              <button
+                key={platform}
+                onClick={() => setPlatformFilter(platform)}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                  platformFilter === platform 
+                    ? "bg-white/20 text-white shadow-sm" 
+                    : "text-white/50 hover:text-white/80"
+                }`}
+              >
+                {platform}
+              </button>
+            ))}
+          </div>
           {["All", "Uncontacted", "Emailed", "Closed"].map(status => (
             <button
               key={status}
@@ -325,6 +364,24 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
   const telUrl = lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, '')}` : "#";
   const websiteUrl = lead.website ? (lead.website.startsWith('http') ? lead.website : `https://${lead.website}`) : "#";
 
+  const isSocialLead = lead.platform && lead.platform !== 'gmaps';
+  const isJobLead = lead.kind === 'job' || lead.platform === 'upwork';
+  
+  const platformColors: Record<string, string> = {
+    reddit: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    x: 'bg-white/10 text-white border-white/20',
+    linkedin: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    instagram: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
+    hackernews: 'bg-orange-600/20 text-orange-500 border-orange-600/30',
+    devto: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+    stackoverflow: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    quora: 'bg-red-500/20 text-red-400 border-red-500/30',
+    producthunt: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+    upwork: 'bg-green-500/20 text-green-400 border-green-500/30',
+    gmaps: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+  };
+  const platformColor = platformColors[lead.platform || 'gmaps'] || 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+
   return (
     <motion.div layout className="bg-card/40 border border-white/10 rounded-2xl p-5 shadow-lg relative overflow-hidden group">
       <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500/50 group-hover:bg-indigo-400 transition-colors"></div>
@@ -333,7 +390,12 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
       <div className="flex flex-col xl:flex-row gap-5 justify-between items-start xl:items-center pl-3">
         <div className="space-y-3 flex-1 cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
           <div className="flex flex-wrap items-center gap-3">
-            <h3 className="font-extrabold text-xl text-white group-hover:text-indigo-300 transition-colors">{lead.name}</h3>
+            <span className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider ${platformColor}`}>
+              {lead.platform || 'gmaps'}
+            </span>
+            <h3 className="font-extrabold text-xl text-white group-hover:text-indigo-300 transition-colors">
+              {lead.title || lead.name}
+            </h3>
             {lead.lead_score !== null && lead.lead_score !== undefined && (
               <span className={`px-3 py-1 rounded-full text-xs font-black border tracking-wide uppercase ${
                 lead.lead_score >= 8 ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.2)]' :
@@ -350,6 +412,14 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
             )}
           </div>
           
+          {isSocialLead && lead.author && (
+            <div className="text-sm text-gray-400 flex items-center gap-1.5 mt-1">
+              <User size={14} className="text-gray-500" />
+              <span className="font-medium text-gray-300">@{lead.author}</span>
+              {lead.posted_at && <span className="text-gray-600 px-1">• {new Date(lead.posted_at).toLocaleDateString()}</span>}
+            </div>
+          )}
+          
           <div className="flex flex-wrap items-center gap-2 mt-2">
             {lead.website && (() => {
               const linkInfo = detectLinkType(lead.website);
@@ -359,7 +429,7 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
                 </a>
               );
             })()}
-            {!lead.website && (
+            {!lead.website && !isSocialLead && (
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs font-bold text-red-400">
                 <Globe size={14} /> No Website
               </span>
@@ -374,9 +444,16 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
                 <Mail size={14} className="text-indigo-400" /> {emails[0]}
               </a>
             )}
-            <a href={mapUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-red-500/20 hover:border-red-500/30 border border-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors">
-              <MapPin size={14} className="text-red-400" /> GMaps
-            </a>
+            {!isSocialLead && (
+              <a href={mapUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-red-500/20 hover:border-red-500/30 border border-white/10 rounded-lg text-xs font-semibold text-white/80 transition-colors">
+                <MapPin size={14} className="text-red-400" /> GMaps
+              </a>
+            )}
+            {isSocialLead && lead.post_url && (
+              <a href={lead.post_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 rounded-lg text-xs font-semibold text-indigo-300 transition-colors shadow-sm">
+                <ExternalLink size={14} /> {isJobLead ? 'View Job' : 'View Post'}
+              </a>
+            )}
             {/* Show social links from the socials array too */}
             {socials.length > 0 && socials.map((social: string, idx: number) => {
               const socialInfo = detectLinkType(social);
@@ -479,14 +556,25 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
                     </p>
                   </div>
                 )}
+
+                {lead.pain_point && lead.pain_point !== "none" && (
+                  <div className="space-y-2 bg-red-500/5 p-4 rounded-xl border border-red-500/20">
+                    <div className="flex items-center gap-2 text-xs font-bold text-red-400 uppercase tracking-wider">
+                      <Target size={14} /> Identified Pain Point
+                    </div>
+                    <p className="text-sm text-white/80 leading-relaxed font-medium">
+                      {lead.pain_point}
+                    </p>
+                  </div>
+                )}
                 
-                {lead.about_snippet && (
+                {(lead.about_snippet || lead.post_content) && (
                   <div className="space-y-2 bg-white/5 p-4 rounded-xl border border-white/10">
                     <div className="flex items-center gap-2 text-xs font-bold text-white/50 uppercase tracking-wider">
-                      <MapPin size={14} /> About Snippet
+                      <MapPin size={14} /> {isSocialLead ? 'Original Content' : 'About Snippet'}
                     </div>
-                    <p className="text-sm text-white/60 leading-relaxed">
-                      {lead.about_snippet}
+                    <p className="text-sm text-white/60 leading-relaxed whitespace-pre-wrap">
+                      {lead.post_content || lead.about_snippet}
                     </p>
                   </div>
                 )}
