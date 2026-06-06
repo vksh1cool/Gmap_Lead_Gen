@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2, Mail, Globe, Brain, User, Target, ChevronDown, Phone, MapPin, Search, Trash2, ChevronRight, Briefcase, ExternalLink } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 
 // Smart link detection
 function detectLinkType(url: string): { type: string; label: string; color: string; hoverColor: string } {
@@ -263,7 +263,7 @@ function BatchGroup({ batch, batchIdx, updateStatus, deleteLead, updatingId }: a
           <div>
             <h2 className="text-lg font-bold text-white uppercase tracking-wider">{batch.search_query}</h2>
             <p className="text-sm text-white/50 font-medium mt-1">
-              Scraped {formatDistanceToNow(new Date(batch.scraped_at), { addSuffix: true })} • {batch.leads.length} Leads
+              Scraped on {format(new Date(batch.scraped_at), "MMM d, yyyy 'at' h:mm a")} • {batch.leads.length} Leads
             </p>
           </div>
         </div>
