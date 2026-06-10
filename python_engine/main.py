@@ -114,7 +114,8 @@ async def crawl_website(url: str, context: BrowserContext, engine: AntiBanEngine
         content = await page.content()
         # Emails
         for match in re.findall(EMAIL_REGEX, content):
-            if not match.endswith('.png') and not match.endswith('.jpg'):
+            match_lower = match.lower()
+            if not match_lower.endswith('.png') and not match_lower.endswith('.jpg') and 'sentry' not in match_lower and 'wixpress' not in match_lower:
                 emails.add(match)
         # Socials
         for match in re.finditer(SOCIAL_REGEX, content):
@@ -155,24 +156,25 @@ async def process_business_url(href: str, context: BrowserContext, engine: AntiB
         
         rating, reviews = "", ""
         try:
-            rating_el = page.locator('div[aria-label*="stars"]').first
+            rating_el = page.locator('[aria-label*="stars"]').first
             if await rating_el.count() > 0:
                 aria_label = await rating_el.get_attribute("aria-label")
                 if aria_label:
-                    # aria-label is like "4.8 stars" — grab the leading number
-                    m = re.search(r"([\d.]+)", aria_label)
+                    m = re.search(r"([\d.]+)\s*star", aria_label, re.IGNORECASE)
                     if m:
                         rating = m.group(1)
-            # Reviews: read the COUNT from the aria-label, never the button text.
-            # button.text_content() returns a Material-Icon glyph (e.g. ""),
-            # whereas the aria-label reads "1,234 reviews".
-            review_button = page.locator('button[aria-label*="review"]').first
-            if await review_button.count() > 0:
-                aria_label = await review_button.get_attribute("aria-label")
-                if aria_label:
-                    m = re.search(r"([\d,]+)\s*review", aria_label)
-                    if m:
-                        reviews = m.group(1).replace(",", "")
+                    m_rev = re.search(r"([\d,]+)\s*review", aria_label, re.IGNORECASE)
+                    if m_rev:
+                        reviews = m_rev.group(1).replace(",", "")
+            
+            if not reviews:
+                review_button = page.locator('[aria-label*="review"]').first
+                if await review_button.count() > 0:
+                    aria_label = await review_button.get_attribute("aria-label")
+                    if aria_label:
+                        m = re.search(r"([\d,]+)\s*review", aria_label, re.IGNORECASE)
+                        if m:
+                            reviews = m.group(1).replace(",", "")
         except Exception: pass
             
         website = ""

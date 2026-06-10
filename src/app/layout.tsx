@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import { Suspense } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -39,7 +40,9 @@ export default function RootLayout({
         {/* Noise / Grain Texture Overlay */}
         <div className="fixed inset-0 pointer-events-none z-[1] opacity-[0.035] noise-overlay" />
 
-        <Sidebar />
+        <Suspense fallback={<div className="w-64 border-r border-border/40 bg-background/80 flex flex-col h-screen fixed top-0 left-0 z-50"></div>}>
+          <Sidebar />
+        </Suspense>
         
         <main className="flex-1 flex flex-col h-full overflow-y-auto relative z-10 pl-64">
           {children}

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, MapPin, Target, Download, Loader2, Mail, ExternalLink, Star, StarHalf, ShieldAlert, Key, Gem, Trophy, Trash2, Clock, Radio, CheckCircle2, Zap, ArrowRight, Activity, User } from 'lucide-react';
+import { Search, Target, Download, Loader2, Mail, ExternalLink, Star, ShieldAlert, Key, Gem, Trophy, Trash2, Clock, Radio, CheckCircle2, Zap, User, Sparkles, CheckSquare, Square, Activity, MapPin, Navigation } from 'lucide-react';
 import { ScoredLead } from '@/lib/types';
 
 /* ── Animation variants ── */
@@ -61,44 +61,31 @@ interface PlatformDef {
   id: string;
   label: string;
   emoji: string;
-  color: string;        // tailwind border/bg color when selected
-  glowColor: string;    // shadow glow
-  tier: 'location' | 'social' | 'qa';
+  color: string;
+  glowColor: string;
 }
 
 const PLATFORMS: PlatformDef[] = [
-  // Location-Based
-  { id: 'gmaps', label: 'Google Maps', emoji: '📍', color: 'border-emerald-400 bg-emerald-500/15 text-emerald-300', glowColor: 'shadow-emerald-500/25', tier: 'location' },
-  // Social & Forums
-  { id: 'reddit', label: 'Reddit', emoji: '🔶', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25', tier: 'social' },
-  { id: 'x', label: 'X / Twitter', emoji: '✕', color: 'border-gray-300 bg-white/10 text-gray-200', glowColor: 'shadow-white/15', tier: 'social' },
-  { id: 'linkedin', label: 'LinkedIn', emoji: '🔗', color: 'border-blue-400 bg-blue-500/15 text-blue-300', glowColor: 'shadow-blue-500/25', tier: 'social' },
-  { id: 'instagram', label: 'Instagram', emoji: '📸', color: 'border-pink-400 bg-pink-500/15 text-pink-300', glowColor: 'shadow-pink-500/25', tier: 'social' },
-  { id: 'hackernews', label: 'HackerNews', emoji: '🟧', color: 'border-orange-500 bg-orange-600/15 text-orange-400', glowColor: 'shadow-orange-600/25', tier: 'social' },
-  { id: 'devto', label: 'Dev.to', emoji: '⚡', color: 'border-indigo-400 bg-indigo-500/15 text-indigo-300', glowColor: 'shadow-indigo-500/25', tier: 'social' },
-  // Q&A & Jobs
-  { id: 'stackoverflow', label: 'StackOverflow', emoji: '📚', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25', tier: 'qa' },
-  { id: 'quora', label: 'Quora', emoji: '💬', color: 'border-red-400 bg-red-500/15 text-red-300', glowColor: 'shadow-red-500/25', tier: 'qa' },
-  { id: 'producthunt', label: 'ProductHunt', emoji: '🚀', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25', tier: 'qa' },
-  { id: 'upwork', label: 'Upwork', emoji: '💼', color: 'border-green-400 bg-green-500/15 text-green-300', glowColor: 'shadow-green-500/25', tier: 'qa' },
+  { id: 'gmaps', label: 'Google Maps', emoji: '📍', color: 'border-emerald-400 bg-emerald-500/15 text-emerald-300', glowColor: 'shadow-emerald-500/25' },
+  { id: 'reddit', label: 'Reddit', emoji: '🔶', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25' },
+  { id: 'x', label: 'X / Twitter', emoji: '✕', color: 'border-gray-300 bg-white/10 text-gray-200', glowColor: 'shadow-white/15' },
+  { id: 'linkedin', label: 'LinkedIn', emoji: '🔗', color: 'border-blue-400 bg-blue-500/15 text-blue-300', glowColor: 'shadow-blue-500/25' },
+  { id: 'instagram', label: 'Instagram', emoji: '📸', color: 'border-pink-400 bg-pink-500/15 text-pink-300', glowColor: 'shadow-pink-500/25' },
+  { id: 'hackernews', label: 'HackerNews', emoji: '🟧', color: 'border-orange-500 bg-orange-600/15 text-orange-400', glowColor: 'shadow-orange-600/25' },
+  { id: 'devto', label: 'Dev.to', emoji: '⚡', color: 'border-indigo-400 bg-indigo-500/15 text-indigo-300', glowColor: 'shadow-indigo-500/25' },
+  { id: 'darkweb', label: 'Dark Web / Tor', emoji: '🧅', color: 'border-purple-600 bg-purple-700/15 text-purple-400', glowColor: 'shadow-purple-700/25' },
+  { id: 'stackoverflow', label: 'StackOverflow', emoji: '📚', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25' },
+  { id: 'quora', label: 'Quora', emoji: '💬', color: 'border-red-400 bg-red-500/15 text-red-300', glowColor: 'shadow-red-500/25' },
+  { id: 'producthunt', label: 'ProductHunt', emoji: '🚀', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25' },
+  { id: 'upwork', label: 'Upwork', emoji: '💼', color: 'border-green-400 bg-green-500/15 text-green-300', glowColor: 'shadow-green-500/25' },
 ];
 
-const TIER_LABELS: Record<string, { emoji: string; label: string }> = {
-  location: { emoji: '📍', label: 'Location-Based' },
-  social: { emoji: '💬', label: 'Social & Forums' },
-  qa: { emoji: '🔍', label: 'Q&A & Jobs' },
-};
-
-const SOCIAL_PLATFORMS = PLATFORMS.filter(p => p.tier !== 'location').map(p => p.id);
-
-/* ── Platform badge helper (used in lead cards) ── */
 function getPlatformBadge(platformId: string) {
   const p = PLATFORMS.find(pl => pl.id === platformId);
   if (!p) return { emoji: '🌐', label: platformId, colorClass: 'bg-gray-500/20 text-gray-300 border-gray-500/30' };
   return { emoji: p.emoji, label: p.label, colorClass: `${p.color}` };
 }
 
-/* ── Elapsed timer hook ── */
 function useElapsedTimer(isRunning: boolean) {
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef<number | null>(null);
@@ -108,7 +95,6 @@ function useElapsedTimer(isRunning: boolean) {
     if (isRunning) {
       startRef.current = Date.now();
       setElapsed(0);
-
       const tick = () => {
         if (startRef.current) {
           setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
@@ -119,12 +105,10 @@ function useElapsedTimer(isRunning: boolean) {
     } else {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     }
-
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [isRunning]);
-
   return elapsed;
 }
 
@@ -135,61 +119,46 @@ function formatTime(seconds: number): string {
 }
 
 export default function Home() {
+  // ── Smart Intent State ──
+  const [intentDump, setIntentDump] = useState('');
+  const [isAnalyzingIntent, setIsAnalyzingIntent] = useState(false);
+  const [generatedOptions, setGeneratedOptions] = useState<any[]>([]);
+  const [selectedOptionIndices, setSelectedOptionIndices] = useState<number[]>([]);
+  const [limit, setLimit] = useState<number>(10);
+
   // ── Multi-platform state ──
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(['gmaps']);
-  const [keyword, setKeyword] = useState('');
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(PLATFORMS.map(p => p.id));
+
+  const togglePlatform = (id: string) => {
+    setSelectedPlatforms(prev =>
+      prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
+    );
+  };
+
+  const selectAll = () => setSelectedPlatforms(PLATFORMS.map(p => p.id));
+  const selectSocialOnly = () => setSelectedPlatforms(PLATFORMS.filter(p => p.id !== 'gmaps').map(p => p.id));
+
   const [niche, setNiche] = useState('');
   const [location, setLocation] = useState('');
-  const [limit, setLimit] = useState<number>(10);
+
   const [isScraping, setIsScraping] = useState(false);
   const [leads, setLeads] = useState<ScoredLead[]>([]);
   const [progress, setProgress] = useState<string>('');
+  
   const [apiKey, setApiKey] = useState('');
   const [aiProvider, setAiProvider] = useState('nim');
   const [aiModel, setAiModel] = useState('meta/llama-3.1-8b-instruct');
 
-  // Stage tracking
   const [stage, setStage] = useState<Stage>('idle');
   const [currentLeadName, setCurrentLeadName] = useState<string>('');
-
-  // ── Rate-limit notices (per platform) — drives the cooldown dialog ──
+  
   type RateLimitNotice = { platform: string; label: string; cooldown_minutes: number; message: string; until: number };
   const [rateLimits, setRateLimits] = useState<Record<string, RateLimitNotice>>({});
   const dismissRateLimit = (platform: string) =>
     setRateLimits(prev => { const next = { ...prev }; delete next[platform]; return next; });
 
-  // Elapsed timer
   const elapsed = useElapsedTimer(isScraping);
 
-  // Location Autocomplete State
-  const [suggestions, setSuggestions] = useState<{display_name: string}[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
-  const suggestionRef = useRef<HTMLDivElement>(null);
-
-  // Derived states
-  const hasGmaps = selectedPlatforms.includes('gmaps');
-  const hasSocial = selectedPlatforms.some(p => p !== 'gmaps');
-  const socialPlatforms = selectedPlatforms.filter(p => p !== 'gmaps');
-
-  // ── Platform toggle ──
-  const togglePlatform = (platformId: string) => {
-    setSelectedPlatforms(prev => {
-      if (prev.includes(platformId)) {
-        const next = prev.filter(p => p !== platformId);
-        return next.length === 0 ? prev : next; // don't allow empty
-      }
-      return [...prev, platformId];
-    });
-  };
-
-  // ── Quick-select helpers ──
-  const selectAll = () => setSelectedPlatforms(PLATFORMS.map(p => p.id));
-  const selectSocialOnly = () => setSelectedPlatforms(SOCIAL_PLATFORMS);
-  const selectMapsOnly = () => setSelectedPlatforms(['gmaps']);
-  const clearAll = () => setSelectedPlatforms(['gmaps']); // always keep at least one
-
-  // Load API key and config from local storage on mount
   useEffect(() => {
     const provider = localStorage.getItem('ai_provider') || 'nim';
     setAiProvider(provider);
@@ -211,49 +180,6 @@ export default function Home() {
     setAiModel(model);
   }, []);
 
-  // Handle clicking outside of suggestions
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (suggestionRef.current && !suggestionRef.current.contains(event.target as Node)) {
-        setShowSuggestions(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  // Handle location input change
-  const handleLocationChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setLocation(val);
-    
-    if (val.length < 3) {
-      setSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-
-    setIsSearchingLocation(true);
-    setShowSuggestions(true);
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(val)}&format=json&limit=5&featuretype=city`);
-      const data = await res.json();
-      setSuggestions(data);
-    } catch (err) {
-      console.error("Location search failed", err);
-    } finally {
-      setIsSearchingLocation(false);
-    }
-  };
-
-  const selectSuggestion = (name: string) => {
-    const parts = name.split(',').map(p => p.trim());
-    const simpleName = parts.length > 2 ? `${parts[0]}, ${parts[parts.length - 2]}` : name;
-    setLocation(simpleName);
-    setShowSuggestions(false);
-  };
-
-  // Derive stage from progress messages
   const deriveStage = useCallback((type: string, message?: string): void => {
     if (type === 'info') {
       const msg = (message || '').toLowerCase();
@@ -275,7 +201,6 @@ export default function Home() {
     }
   }, []);
 
-  // ── Stream reader helper ──
   const readStream = async (res: Response) => {
     if (!res.body) throw new Error('No readable stream');
     const reader = res.body.getReader();
@@ -313,8 +238,6 @@ export default function Home() {
           } else if (parsed.type === 'done') {
             setProgress('Scraping complete!');
           } else if (parsed.type === 'rate_limited') {
-            // A platform hit a search rate-limit — pop the cooldown dialog and
-            // stop hitting it. Protects the IP from a ban.
             setRateLimits((prev) => ({
               ...prev,
               [parsed.platform]: {
@@ -336,50 +259,65 @@ export default function Home() {
     }
   };
 
+  const handleAnalyzeIntent = async () => {
+    if (!intentDump.trim()) return;
+    setIsAnalyzingIntent(true);
+    setGeneratedOptions([]);
+    setSelectedOptionIndices([]);
+    try {
+      const res = await fetch('/api/analyze-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intent: intentDump, platforms: selectedPlatforms, niche, location, apiKey, aiProvider, aiModel }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setGeneratedOptions(data.options || []);
+      // Auto-select all generated options
+      setSelectedOptionIndices((data.options || []).map((_: any, i: number) => i));
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to analyze intent: ' + err.message);
+    } finally {
+      setIsAnalyzingIntent(false);
+    }
+  };
+
+  const toggleOption = (idx: number) => {
+    setSelectedOptionIndices(prev => 
+      prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+    );
+  };
+
   const handleScrape = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (hasGmaps && (!niche || !location)) return;
-    if (hasSocial && !keyword) return;
-    if (selectedPlatforms.length === 0) return;
+    if (selectedOptionIndices.length === 0) return;
 
     setIsScraping(true);
     setLeads([]);
-    setProgress('Initializing scraper...');
+    setProgress('Initializing engine...');
     setStage('connecting');
     setCurrentLeadName('');
 
     try {
-      const requests: Promise<void>[] = [];
-
-      // Fire gmaps request if selected
-      if (hasGmaps) {
-        const gmapsPayload = { platform: 'gmaps', niche, location, limit, apiKey, aiProvider, aiModel };
-        const gmapsReq = fetch('/api/scrape', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(gmapsPayload),
-        }).then(res => readStream(res));
-        requests.push(gmapsReq);
-      }
-
-      // Fire social request if any social platforms selected
-      if (hasSocial) {
-        const socialPayload = {
-          platform: socialPlatforms.length === 1 ? socialPlatforms[0] : 'all',
-          platforms: socialPlatforms.join(','),
-          keyword,
+      const requests = selectedOptionIndices.map(idx => {
+        const option = generatedOptions[idx];
+        const payload = {
+          platform: option.platform,
+          niche: option.niche || niche,
+          location: option.location || location,
+          keyword: option.keyword,
           limit,
           apiKey,
           aiProvider,
           aiModel,
         };
-        const socialReq = fetch('/api/scrape', {
+        return fetch('/api/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(socialPayload),
+          body: JSON.stringify(payload),
         }).then(res => readStream(res));
-        requests.push(socialReq);
-      }
+      });
 
       await Promise.all(requests);
       setStage('complete');
@@ -422,7 +360,7 @@ export default function Home() {
       
       for (const row of csvData) {
         const values = headers.map(header => {
-          const val = (row as any)[header] || '';
+          const val = (row as any)[header] ?? '';
           const escaped = val.toString().replace(/"/g, '""');
           return `"${escaped}"`;
         });
@@ -434,7 +372,7 @@ export default function Home() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `leads-${selectedPlatforms.join('-')}-${Date.now()}.csv`.replace(/\s+/g, '_');
+      a.download = `leads-smart-intent-${Date.now()}.csv`.replace(/\s+/g, '_');
       a.click();
     } catch (err) {
       console.error(err);
@@ -443,11 +381,12 @@ export default function Home() {
   };
 
   const currentStageIdx = getStageIndex(stage);
-  const progressPercent = leads.length > 0 ? Math.min((leads.length / limit) * 100, 100) : 0;
+  // Progress percent calculation is rough since we have multiple options
+  const totalLimit = limit * selectedOptionIndices.length;
+  const progressPercent = leads.length > 0 && totalLimit > 0 ? Math.min((leads.length / totalLimit) * 100, 100) : 0;
 
   return (
     <main className="min-h-screen bg-[#0A0A0A] text-white p-8 font-sans selection:bg-indigo-500/30">
-      {/* ── Rate-limit cooldown dialog ── */}
       <AnimatePresence>
         {Object.keys(rateLimits).length > 0 && (
           <motion.div
@@ -501,17 +440,15 @@ export default function Home() {
         initial="hidden"
         animate="visible"
       >
-        
-        {/* Header */}
         <motion.header
           variants={itemVariants}
           className="flex flex-col md:flex-row items-center justify-between gap-6 pb-8 border-b border-white/10"
         >
           <div className="space-y-2">
             <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-cyan-400 to-emerald-400 bg-clip-text text-transparent">
-              LaunchPixel Lead Engine
+              LaunchPixel Smart Engine
             </h1>
-            <p className="text-gray-400 text-sm">Multi-platform buyer-intent lead generation — Maps, Social, Forums & Jobs.</p>
+            <p className="text-gray-400 text-sm">Tell the AI what you want, and it will generate specific lead targets for you.</p>
           </div>
           <AnimatePresence>
             {leads.length > 0 && (
@@ -533,269 +470,200 @@ export default function Home() {
           </AnimatePresence>
         </motion.header>
 
-        {/* Form Container — animated gradient border */}
+        {/* Form Container */}
         <motion.section
           variants={itemVariants}
           className="animated-gradient-border bg-white/[0.03] p-6 rounded-2xl backdrop-blur-xl shadow-2xl space-y-6 relative"
         >
-          {/* Subtle radial glow behind form */}
           <div className="absolute -top-32 -right-32 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
           <div className="absolute -bottom-32 -left-32 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="flex items-center gap-2 mb-2 relative z-10">
-            <span className={`w-2 h-2 rounded-full ${isScraping ? 'bg-cyan-500' : 'bg-green-500'} animate-pulse`}></span>
-            <span className="text-xs font-semibold text-gray-400 tracking-wider">
-              {isScraping ? 'Engine Running' : 'Engine Ready'}
-            </span>
+          {/* Platform Selectors */}
+          <div className="space-y-4 relative z-10 border-b border-white/10 pb-6">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
+                <Target className="w-4 h-4" /> Targeted Platforms
+              </label>
+              <div className="flex gap-2">
+                <button type="button" onClick={selectAll} className="text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border border-white/10">All</button>
+                <button type="button" onClick={() => setSelectedPlatforms([])} className="text-xs px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 transition-colors border border-white/10">None</button>
+                <button type="button" onClick={selectSocialOnly} className="text-xs px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 transition-colors border border-indigo-500/20">Social Only</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {PLATFORMS.map(platform => {
+                const isSelected = selectedPlatforms.includes(platform.id);
+                return (
+                  <button
+                    key={platform.id}
+                    type="button"
+                    onClick={() => togglePlatform(platform.id)}
+                    className={`
+                      relative overflow-hidden p-3 rounded-xl border text-left transition-all duration-300 group
+                      ${isSelected ? `bg-white/[0.08] ${platform.color} shadow-lg ${platform.glowColor}` : 'bg-black/40 border-white/[0.06] text-gray-400 hover:bg-white/[0.04]'}
+                    `}
+                  >
+                    {isSelected && (
+                      <span className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-50" />
+                    )}
+                    <div className="relative z-10 flex items-center gap-2">
+                      <span className="text-lg filter drop-shadow-md">{platform.emoji}</span>
+                      <span className="text-xs font-semibold tracking-wide">{platform.label}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* ── Quick-select Buttons ── */}
-          <motion.div variants={itemVariants} className="relative z-10 flex flex-wrap gap-2">
-            <button
-              id="btn-select-all"
-              type="button"
-              onClick={selectAll}
-              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all"
-            >
-              ✦ Select All
-            </button>
-            <button
-              id="btn-social-only"
-              type="button"
-              onClick={selectSocialOnly}
-              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all"
-            >
-              💬 Social Only
-            </button>
-            <button
-              id="btn-maps-only"
-              type="button"
-              onClick={selectMapsOnly}
-              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all"
-            >
-              📍 Maps Only
-            </button>
-            <button
-              id="btn-clear-all"
-              type="button"
-              onClick={clearAll}
-              className="px-3 py-1.5 text-xs font-bold rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 text-red-400/70 hover:text-red-400 transition-all"
-            >
-              ✕ Clear
-            </button>
-            <div className="ml-auto flex items-center gap-1.5 text-[11px] text-gray-500">
-              <span className="tabular-nums font-mono">{selectedPlatforms.length}</span>
-              <span>platform{selectedPlatforms.length !== 1 ? 's' : ''} selected</span>
-            </div>
-          </motion.div>
-
-          {/* ── Multi-Platform Selector Grid ── */}
-          <motion.div variants={itemVariants} className="relative z-10 space-y-4">
-            {(['location', 'social', 'qa'] as const).map(tier => {
-              const tierInfo = TIER_LABELS[tier];
-              const tierPlatforms = PLATFORMS.filter(p => p.tier === tier);
-              return (
-                <div key={tier}>
-                  <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-2">
-                    {tierInfo.emoji} {tierInfo.label}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {tierPlatforms.map(platform => {
-                      const isSelected = selectedPlatforms.includes(platform.id);
-                      return (
-                        <motion.button
-                          key={platform.id}
-                          id={`platform-toggle-${platform.id}`}
-                          type="button"
-                          onClick={() => togglePlatform(platform.id)}
-                          whileTap={{ scale: 0.95 }}
-                          className={`
-                            relative px-4 py-2.5 rounded-xl text-sm font-semibold border transition-all duration-300 cursor-pointer select-none
-                            flex items-center gap-2
-                            ${isSelected
-                              ? `${platform.color} ${platform.glowColor} shadow-lg`
-                              : 'border-white/[0.08] bg-white/[0.03] text-gray-500 hover:bg-white/[0.06] hover:border-white/[0.15] hover:text-gray-300'
-                            }
-                          `}
-                        >
-                          {/* Active glow ring */}
-                          {isSelected && (
-                            <motion.span
-                              layoutId={`glow-${platform.id}`}
-                              className="absolute inset-0 rounded-xl border border-current opacity-30"
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 0.3 }}
-                              exit={{ opacity: 0 }}
-                              transition={{ duration: 0.3 }}
-                            />
-                          )}
-                          <span className="text-base leading-none">{platform.emoji}</span>
-                          <span className="relative z-10">{platform.label}</span>
-                          {/* Custom checkbox indicator */}
-                          <span className={`
-                            w-4 h-4 rounded-md border-2 flex items-center justify-center transition-all duration-200 ml-1
-                            ${isSelected
-                              ? 'border-current bg-current/20'
-                              : 'border-white/20 bg-transparent'
-                            }
-                          `}>
-                            <AnimatePresence>
-                              {isSelected && (
-                                <motion.svg
-                                  initial={{ scale: 0, opacity: 0 }}
-                                  animate={{ scale: 1, opacity: 1 }}
-                                  exit={{ scale: 0, opacity: 0 }}
-                                  transition={{ duration: 0.15 }}
-                                  className="w-2.5 h-2.5 text-white"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                  strokeWidth={4}
-                                >
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                </motion.svg>
-                              )}
-                            </AnimatePresence>
-                          </span>
-                        </motion.button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </motion.div>
-
-          {/* ── Dynamic Input Fields ── */}
-          <motion.form
-            onSubmit={handleScrape}
-            className="space-y-4 relative z-10"
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
-          >
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-              {/* Niche + Location — shown when gmaps is selected */}
-              <AnimatePresence mode="popLayout">
-                {hasGmaps && (
-                  <>
-                    <motion.div
-                      key="field-niche"
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                      transition={{ duration: 0.3 }}
-                      className="space-y-3 relative"
-                    >
-                      <label className="text-xs font-semibold text-indigo-200 uppercase tracking-wider flex items-center gap-2">
-                        <Target className="w-3 h-3" /> Niche
-                      </label>
+          {/* Intent Dump Section */}
+          <div className="space-y-4 relative z-10">
+            <label className="text-sm font-semibold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
+              <Sparkles className="w-4 h-4" /> Smart Intent Dump
+            </label>
+            <textarea
+              placeholder="e.g. 'I want to find roofing companies in Texas, and also check Reddit for people complaining about roof leaks.'"
+              value={intentDump}
+              onChange={(e) => setIntentDump(e.target.value)}
+              rows={4}
+              className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner resize-y"
+            />
+            
+            <AnimatePresence>
+              {selectedPlatforms.includes('gmaps') && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2"
+                >
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+                      <Target className="w-3 h-3" /> Business Category (Niche)
+                    </label>
+                    <div className="relative">
                       <input
-                        id="input-niche"
                         type="text"
-                        placeholder="e.g. Plumbers, Roofers..."
+                        placeholder="e.g. Plumbers, Roofing, Software Agencies"
                         value={niche}
                         onChange={(e) => setNiche(e.target.value)}
-                        className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
-                        required={hasGmaps}
+                        className="w-full bg-black/40 border border-emerald-500/30 rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
                       />
-                    </motion.div>
+                      <Target className="w-4 h-4 text-emerald-500/50 absolute left-3.5 top-3.5" />
+                    </div>
+                  </div>
 
-                    <motion.div
-                      key="field-location"
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                      transition={{ duration: 0.3, delay: 0.05 }}
-                      className="space-y-3 relative"
-                      ref={suggestionRef}
-                    >
-                      <label className="text-xs font-semibold text-cyan-200 uppercase tracking-wider flex items-center gap-2">
-                        <MapPin className="w-3 h-3" /> Location
-                      </label>
-                      <input
-                        id="input-location"
-                        type="text"
-                        placeholder="e.g. Austin, TX"
-                        value={location}
-                        onChange={handleLocationChange}
-                        onFocus={() => { if (location.length >= 3) setShowSuggestions(true); }}
-                        className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
-                        required={hasGmaps}
-                        autoComplete="off"
-                      />
-                      
-                      {/* Autocomplete Dropdown */}
-                      <AnimatePresence>
-                        {showSuggestions && (
-                          <motion.div
-                            initial={{ opacity: 0, y: -8 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -8 }}
-                            transition={{ duration: 0.2 }}
-                            className="absolute z-50 w-full mt-1 bg-gray-900/95 border border-white/10 rounded-xl shadow-2xl overflow-hidden backdrop-blur-xl"
-                          >
-                            {isSearchingLocation ? (
-                              <div className="p-4 text-center text-gray-400 text-sm flex items-center justify-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin" /> Searching places...
-                              </div>
-                            ) : suggestions.length > 0 ? (
-                              <ul className="max-h-60 overflow-y-auto">
-                                {suggestions.map((s, i) => (
-                                  <li 
-                                    key={i} 
-                                    onClick={() => selectSuggestion(s.display_name)}
-                                    className="px-4 py-3 text-sm text-gray-300 hover:bg-white/10 cursor-pointer border-b border-white/5 last:border-0 transition-colors flex items-start gap-2"
-                                  >
-                                    <MapPin className="w-4 h-4 shrink-0 mt-0.5 text-cyan-500" />
-                                    <span>{s.display_name}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : location.length >= 3 ? (
-                              <div className="p-4 text-center text-gray-500 text-sm">
-                                No matching locations found.
-                              </div>
-                            ) : null}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-
-              {/* Keyword — shown when any social platform is selected */}
-              <AnimatePresence mode="popLayout">
-                {hasSocial && (
-                  <motion.div
-                    key="field-keyword"
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                    transition={{ duration: 0.3 }}
-                    className={`space-y-3 relative ${hasGmaps ? '' : 'col-span-2'}`}
-                  >
-                    <label className="text-xs font-semibold text-purple-200 uppercase tracking-wider flex items-center gap-2">
-                      <Search className="w-3 h-3" /> Keyword / Intent
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+                      <MapPin className="w-3 h-3" /> Target Location
                     </label>
-                    <input
-                      id="input-keyword"
-                      type="text"
-                      placeholder='"need a web developer", "looking for an agency"'
-                      value={keyword}
-                      onChange={(e) => setKeyword(e.target.value)}
-                      className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
-                      required={hasSocial}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="e.g. Austin, TX or London, UK"
+                        value={location}
+                        onChange={(e) => setLocation(e.target.value)}
+                        className="w-full bg-black/40 border border-emerald-500/30 rounded-xl pl-10 pr-10 py-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+                      />
+                      <MapPin className="w-4 h-4 text-emerald-500/50 absolute left-3.5 top-3.5" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (navigator.geolocation) {
+                            navigator.geolocation.getCurrentPosition(pos => {
+                               setLocation(`${pos.coords.latitude}, ${pos.coords.longitude}`);
+                            });
+                          }
+                        }}
+                        className="absolute right-3 top-3 p-0.5 text-emerald-500/50 hover:text-emerald-400 transition-colors"
+                        title="Use my current location"
+                      >
+                        <Navigation className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-              {/* Max Leads Field */}
-              <motion.div variants={itemVariants} className="space-y-3">
+            <button
+              type="button"
+              onClick={handleAnalyzeIntent}
+              disabled={isAnalyzingIntent || !intentDump.trim()}
+              className={`
+                px-6 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white
+                ${isAnalyzingIntent || !intentDump.trim()
+                  ? 'bg-indigo-600/50 cursor-not-allowed opacity-70'
+                  : 'bg-indigo-600 hover:bg-indigo-500 hover:shadow-lg hover:shadow-indigo-500/25 active:scale-95'
+                }
+              `}
+            >
+              {isAnalyzingIntent ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Analyzing Intent...</>
+              ) : (
+                <><Zap className="w-4 h-4" /> Generate Options</>
+              )}
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {generatedOptions.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="space-y-4 pt-4 border-t border-white/10 relative z-10"
+              >
+                <label className="text-sm font-semibold text-cyan-300 uppercase tracking-wider">
+                  Select Options to Scrape
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {generatedOptions.map((opt, idx) => {
+                    const isSelected = selectedOptionIndices.includes(idx);
+                    const badge = getPlatformBadge(opt.platform);
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => toggleOption(idx)}
+                        className={`
+                          cursor-pointer p-4 rounded-xl border transition-all duration-200 flex items-start gap-3
+                          ${isSelected ? 'bg-cyan-500/10 border-cyan-500/40 shadow-[0_0_15px_rgba(34,211,238,0.1)]' : 'bg-white/5 border-white/10 hover:border-white/20'}
+                        `}
+                      >
+                        <div className="mt-0.5 text-cyan-400">
+                          {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold">{opt.label}</span>
+                            <span className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-full border ${badge.colorClass}`}>
+                              {badge.emoji} {badge.label}
+                            </span>
+                          </div>
+                          {opt.niche && opt.location && (
+                            <p className="text-xs text-gray-400">Targeting "{opt.niche}" in {opt.location}</p>
+                          )}
+                          {opt.keyword && (
+                            <p className="text-xs text-gray-400">Searching for "{opt.keyword}"</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Execute Section */}
+          <motion.form
+            onSubmit={handleScrape}
+            className="space-y-4 pt-6 border-t border-white/10 relative z-10"
+          >
+            <div className="flex flex-col md:flex-row items-end gap-4">
+              <div className="w-full md:w-1/3 space-y-2">
                 <label className="text-xs font-semibold text-purple-200 uppercase tracking-wider flex items-center gap-2">
-                  <Star className="w-3 h-3" /> Max Leads
+                  <Star className="w-3 h-3" /> Max Leads per Option
                 </label>
                 <input
                   id="input-limit"
@@ -807,36 +675,34 @@ export default function Home() {
                   className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
                   required
                 />
-              </motion.div>
+              </div>
 
-              {/* Run Engine Button */}
-              <motion.div variants={itemVariants}>
+              <div className="w-full md:w-2/3">
                 <button
                   id="btn-run-engine"
                   type="submit"
-                  disabled={isScraping}
+                  disabled={isScraping || selectedOptionIndices.length === 0}
                   className={`
                     w-full h-[46px] rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white relative overflow-hidden
                     ${isScraping
-                      ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 btn-pulse cursor-wait'
-                      : 'bg-gradient-to-r from-indigo-600 via-indigo-500 to-cyan-600 hover:shadow-lg hover:shadow-indigo-500/25 hover:scale-[1.02] active:scale-[0.98]'
+                      ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 btn-pulse cursor-wait'
+                      : 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-cyan-600 hover:shadow-lg hover:shadow-emerald-500/25 hover:scale-[1.02] active:scale-[0.98]'
                     }
-                    disabled:opacity-70
+                    disabled:opacity-50 disabled:cursor-not-allowed
                   `}
                 >
-                  {/* Shimmer overlay on hover */}
                   {!isScraping && (
                     <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent translate-x-[-200%] hover:translate-x-[200%] transition-transform duration-700" />
                   )}
                   <span className="relative z-10 flex items-center gap-2">
                     {isScraping ? (
-                      <><Loader2 className="w-4 h-4 animate-spin" /> Scraping...</>
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Scraping {selectedOptionIndices.length} option(s)...</>
                     ) : (
-                      <><Search className="w-4 h-4" /> Run Engine</>
+                      <><Target className="w-4 h-4" /> Run Engine for {selectedOptionIndices.length} option(s)</>
                     )}
                   </span>
                 </button>
-              </motion.div>
+              </div>
             </div>
           </motion.form>
         </motion.section>
@@ -852,26 +718,20 @@ export default function Home() {
               className="relative"
             >
               <div className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] rounded-2xl p-6 space-y-6 shadow-2xl relative overflow-hidden">
-
-                {/* Background glow when active */}
                 {isScraping && (
                   <div className="absolute inset-0 pointer-events-none">
                     <div className="absolute top-0 left-1/4 w-96 h-32 bg-indigo-500/5 rounded-full blur-3xl" />
                     <div className="absolute bottom-0 right-1/4 w-96 h-32 bg-cyan-500/5 rounded-full blur-3xl" />
                   </div>
                 )}
-
-                {/* ── Stage Pipeline ── */}
                 <div className="relative z-10">
                   <div className="flex items-center justify-between">
                     {PIPELINE_STAGES.map((s, idx) => {
                       const isActive = s.key === stage;
                       const isCompleted = currentStageIdx > idx;
                       const isError = stage === 'error' && idx === currentStageIdx;
-
                       return (
                         <div key={s.key} className="flex items-center flex-1 last:flex-initial">
-                          {/* Stage node */}
                           <div className="flex flex-col items-center gap-2 relative">
                             <div
                               className={`
@@ -886,7 +746,6 @@ export default function Home() {
                                 }
                               `}
                             >
-                              {/* Glow ring for active stage */}
                               {isActive && (
                                 <span className="absolute inset-0 rounded-full animate-ping bg-indigo-500/30" style={{ animationDuration: '2s' }} />
                               )}
@@ -908,8 +767,6 @@ export default function Home() {
                               {s.label}
                             </span>
                           </div>
-
-                          {/* Connector line */}
                           {idx < PIPELINE_STAGES.length - 1 && (
                             <div className="flex-1 h-[2px] mx-3 rounded-full relative overflow-hidden mt-[-22px]">
                               <div className="absolute inset-0 bg-white/[0.06]" />
@@ -927,9 +784,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* ── Stats Row ── */}
                 <div className="relative z-10 grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {/* Elapsed Time */}
                   <div className="bg-black/40 backdrop-blur-sm border border-white/[0.06] rounded-xl p-4 flex items-center gap-3">
                     <div className="w-9 h-9 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
                       <Clock className="w-4 h-4 text-indigo-400" />
@@ -939,8 +794,6 @@ export default function Home() {
                       <p className="text-lg font-mono font-bold text-white tabular-nums">{formatTime(elapsed)}</p>
                     </div>
                   </div>
-
-                  {/* Leads Found */}
                   <div className="bg-black/40 backdrop-blur-sm border border-white/[0.06] rounded-xl p-4 flex items-center gap-3">
                     <div className="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
                       <Target className="w-4 h-4 text-cyan-400" />
@@ -948,35 +801,23 @@ export default function Home() {
                     <div>
                       <p className="text-[11px] text-gray-500 uppercase font-semibold tracking-wider">Leads</p>
                       <p className="text-lg font-mono font-bold text-white tabular-nums">
-                        {leads.length} <span className="text-gray-500 text-sm font-normal">/ {limit}</span>
+                        {leads.length} <span className="text-gray-500 text-sm font-normal">/ {totalLimit}</span>
                       </p>
                     </div>
                   </div>
-
-                  {/* Current Stage */}
                   <div className="bg-black/40 backdrop-blur-sm border border-white/[0.06] rounded-xl p-4 flex items-center gap-3">
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                      stage === 'complete' 
-                        ? 'bg-emerald-500/10 border border-emerald-500/20' 
-                        : stage === 'error'
-                          ? 'bg-red-500/10 border border-red-500/20'
-                          : 'bg-purple-500/10 border border-purple-500/20'
+                      stage === 'complete' ? 'bg-emerald-500/10 border border-emerald-500/20' : stage === 'error' ? 'bg-red-500/10 border border-red-500/20' : 'bg-purple-500/10 border border-purple-500/20'
                     }`}>
-                      <Activity className={`w-4 h-4 ${
-                        stage === 'complete' ? 'text-emerald-400' : stage === 'error' ? 'text-red-400' : 'text-purple-400'
-                      }`} />
+                      <Activity className={`w-4 h-4 ${stage === 'complete' ? 'text-emerald-400' : stage === 'error' ? 'text-red-400' : 'text-purple-400'}`} />
                     </div>
                     <div>
                       <p className="text-[11px] text-gray-500 uppercase font-semibold tracking-wider">Stage</p>
-                      <p className={`text-sm font-bold capitalize ${
-                        stage === 'complete' ? 'text-emerald-400' : stage === 'error' ? 'text-red-400' : 'text-indigo-300'
-                      }`}>
+                      <p className={`text-sm font-bold capitalize ${stage === 'complete' ? 'text-emerald-400' : stage === 'error' ? 'text-red-400' : 'text-indigo-300'}`}>
                         {PIPELINE_STAGES.find(s => s.key === stage)?.label || stage}
                       </p>
                     </div>
                   </div>
-
-                  {/* Processing */}
                   <div className="bg-black/40 backdrop-blur-sm border border-white/[0.06] rounded-xl p-4 flex items-center gap-3">
                     <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
                       <Zap className="w-4 h-4 text-emerald-400" />
@@ -990,7 +831,6 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* ── Progress Bar ── */}
                 <div className="relative z-10 space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-mono text-cyan-400 truncate max-w-[70%]">&gt; {progress}</span>
@@ -999,20 +839,13 @@ export default function Home() {
                   <div className="w-full h-2 bg-white/[0.04] rounded-full overflow-hidden border border-white/[0.06]">
                     <motion.div
                       className={`h-full rounded-full relative ${
-                        stage === 'complete'
-                          ? 'bg-gradient-to-r from-emerald-500 to-emerald-400'
-                          : stage === 'error'
-                            ? 'bg-gradient-to-r from-red-500 to-red-400'
-                            : 'bg-gradient-to-r from-indigo-500 via-cyan-500 to-indigo-500'
+                        stage === 'complete' ? 'bg-gradient-to-r from-emerald-500 to-emerald-400' : stage === 'error' ? 'bg-gradient-to-r from-red-500 to-red-400' : 'bg-gradient-to-r from-indigo-500 via-cyan-500 to-indigo-500'
                       }`}
                       initial={{ width: '0%' }}
                       animate={{ width: isScraping && leads.length === 0 ? '5%' : `${progressPercent}%` }}
                       transition={{ duration: 0.5, ease: 'easeOut' }}
                     >
-                      {/* Shimmer effect on active bar */}
-                      {isScraping && (
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.5s_ease-in-out_infinite] bg-[length:200%_100%]" />
-                      )}
+                      {isScraping && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-[shimmer_1.5s_ease-in-out_infinite] bg-[length:200%_100%]" />}
                     </motion.div>
                   </div>
                 </div>
@@ -1071,13 +904,10 @@ export default function Home() {
                           flex flex-col md:flex-row gap-6
                         `}
                       >
-                        
-                        {/* Left Column: Basic Info */}
                         <div className="flex-1 space-y-3">
                           <div className="flex items-start justify-between">
                             <div>
                               <h3 className="text-xl font-bold flex items-center gap-2 flex-wrap">
-                                {/* Platform Badge */}
                                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase font-bold rounded-full border ${badge.colorClass}`}>
                                   {badge.emoji} {badge.label}
                                 </span>
@@ -1093,13 +923,9 @@ export default function Home() {
                                   </span>
                                 )}
                               </h3>
-                              
-                              {/* Maps lead: address */}
                               {!isSocialLead && lead.address && (
                                 <p className="text-gray-400 text-sm mt-1">{lead.address}</p>
                               )}
-
-                              {/* Social / Job lead: author & content preview */}
                               {isSocialLead && (
                                 <div className="mt-2 space-y-1.5">
                                   {lead.author && (
@@ -1116,8 +942,6 @@ export default function Home() {
                                 </div>
                               )}
                             </div>
-                            
-                            {/* Score Badge */}
                             <div className={`
                               flex flex-col items-center justify-center w-20 h-20 rounded-xl shrink-0 gap-1 p-2
                               bg-black/50 backdrop-blur-sm
@@ -1137,9 +961,7 @@ export default function Home() {
                               {lead.lead_category === 'Junk' && <span className="text-[10px] font-bold uppercase text-gray-500 flex items-center gap-1"><Trash2 className="w-3 h-3"/> Junk</span>}
                             </div>
                           </div>
-
                           <div className="flex flex-wrap items-center gap-3 text-sm text-gray-300">
-                            {/* Maps-specific info */}
                             {!isSocialLead && lead.rating && (
                               <div className="flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-md border border-white/10">
                                 <Star className="w-3.5 h-3.5 text-yellow-500 fill-yellow-500" />
@@ -1157,7 +979,6 @@ export default function Home() {
                                 <ExternalLink className="w-3.5 h-3.5" /> Website
                               </a>
                             )}
-                            {/* Social lead: View Original Post */}
                             {isSocialLead && lead.post_url && (
                               <a
                                 id={`view-post-${lead.id}`}
@@ -1182,8 +1003,6 @@ export default function Home() {
                             ))}
                           </div>
                         </div>
-
-                        {/* Right Column: AI Analysis */}
                         <div className="flex-1 bg-gradient-to-br from-white/[0.03] to-white/[0.01] backdrop-blur-sm border border-white/5 rounded-xl p-5 space-y-4 relative overflow-hidden group-hover:border-white/10 transition-all duration-500">
                           <div className="absolute -top-6 -right-6 p-3 opacity-[0.03] text-indigo-500 group-hover:scale-110 group-hover:rotate-12 transition-transform duration-700">
                             <Zap className="w-40 h-40" />
@@ -1197,7 +1016,6 @@ export default function Home() {
                             <p className="text-sm text-white font-medium italic bg-white/5 p-3.5 rounded-lg border border-white/10 shadow-inner leading-relaxed">"{lead.suggested_pitch || '...'}"</p>
                           </div>
                         </div>
-
                       </motion.div>
                     );
                   })}

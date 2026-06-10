@@ -9,6 +9,7 @@ from scrapers.stackoverflow import scrape_stackoverflow
 from scrapers.google_dork import scrape_google_dork
 from scrapers.producthunt import scrape_producthunt
 from scrapers.x import scrape_x
+from scrapers.darkweb import scrape_darkweb
 from scrapers.search_backends import AllBackendsThrottled
 
 logger = logging.getLogger(__name__)
@@ -23,12 +24,13 @@ DORK_SITES = {
 }
 
 # What "all" expands to — a fast, mostly-reliable spread.
-ALL_PLATFORMS = ["reddit", "x", "hackernews", "devto", "stackoverflow", "linkedin"]
+ALL_PLATFORMS = ["reddit", "x", "hackernews", "devto", "stackoverflow", "linkedin", "darkweb"]
 
 # Friendly platform labels for the rate-limit dialog.
 PLATFORM_LABELS = {
     "x": "X / Twitter", "linkedin": "LinkedIn", "instagram": "Instagram",
     "quora": "Quora", "producthunt": "ProductHunt", "upwork": "Upwork", "reddit": "Reddit",
+    "darkweb": "Dark Web / Tor",
 }
 
 
@@ -50,6 +52,8 @@ async def _scrape_one(platform: str, keyword: str, n: int, search_mode: str = "a
         return await scrape_stackoverflow(keyword, limit=n)
     if platform == "producthunt":
         return await scrape_producthunt(keyword, limit=n)
+    if platform == "darkweb":
+        return await scrape_darkweb(keyword, limit=n)
     if platform in DORK_SITES:
         return await scrape_google_dork(platform, DORK_SITES[platform], keyword, limit=n, search_mode=search_mode)
     logger.warning("Unknown platform requested: %s", platform)

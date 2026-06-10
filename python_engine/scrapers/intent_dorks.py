@@ -43,13 +43,17 @@ def expand_keyword_to_dorks(platform: str, site_domain: str, keyword: str) -> Li
         suffixes = GENERAL_INTENT_SUFFIXES
         
     dorks = []
+    # For long, complex sentences or questions, exact-phrase quotes 
+    # will yield 0 results. If it's short, exact-phrase is better.
+    is_complex = len(keyword.split()) > 3 or "?" in keyword
+    kw_formatted = f'"{keyword}"' if not is_complex else keyword
     
     # First, append the highly targeted suffix queries
     for suffix in suffixes:
-        dorks.append(f'site:{site_domain} "{keyword}" {suffix}')
+        dorks.append(f'site:{site_domain} {kw_formatted} {suffix}')
         
     # Finally, append the base keyword query without a specific suffix 
     # to catch any remaining leads after specific intents are exhausted.
-    dorks.append(f'site:{site_domain} "{keyword}"')
+    dorks.append(f'site:{site_domain} {kw_formatted}')
         
     return dorks

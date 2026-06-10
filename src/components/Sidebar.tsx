@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { LayoutDashboard, Target, Users, Settings, Activity } from "lucide-react";
 import { motion } from "framer-motion";
 
 export default function Sidebar() {
-  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentTab = searchParams.get("tab") || "dashboard";
   const [leadCount, setLeadCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -29,10 +30,10 @@ export default function Sidebar() {
   }, []);
 
   const links = [
-    { href: "/", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/scraper", label: "Lead Hunter", icon: Target },
-    { href: "/crm", label: "CRM Pipeline", icon: Users },
-    { href: "/settings", label: "Settings", icon: Settings },
+    { href: "/?tab=dashboard", tab: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/?tab=scraper", tab: "scraper", label: "Lead Hunter", icon: Target },
+    { href: "/?tab=crm", tab: "crm", label: "CRM Pipeline", icon: Users },
+    { href: "/?tab=settings", tab: "settings", label: "Settings", icon: Settings },
   ];
 
   return (
@@ -49,8 +50,8 @@ export default function Sidebar() {
       <nav className="flex-1 px-4 space-y-1.5 mt-2">
         {links.map((link) => {
           const Icon = link.icon;
-          const isActive = pathname === link.href;
-          const isCRM = link.href === "/crm";
+          const isActive = currentTab === link.tab;
+          const isCRM = link.tab === "crm";
           return (
             <Link
               key={link.href}

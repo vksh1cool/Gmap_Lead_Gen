@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { scoreLead } from '@/lib/nim';
+import { scoreLead, optimizeSearchQuery } from '@/lib/nim';
 import { query } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -20,14 +20,16 @@ export async function POST(req: NextRequest) {
       if (!niche || !location) {
         return NextResponse.json({ error: 'Missing niche/location for Gmaps' }, { status: 400 });
       }
-      searchQuery = `${niche} in ${location}`;
-      fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(niche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+      const optimizedNiche = await optimizeSearchQuery(niche, 'Google Maps', apiKey, aiProvider, aiModel);
+      searchQuery = `${optimizedNiche} in ${location}`;
+      fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
     } else {
       if (!keyword) {
         return NextResponse.json({ error: 'Missing keyword for social scrape' }, { status: 400 });
       }
-      searchQuery = `[${activePlatform}] ${keyword}`;
-      fetchUrl = `http://127.0.0.1:8000/scrape-social?platform=${encodeURIComponent(activePlatform)}&keyword=${encodeURIComponent(keyword)}&limit=${limit}&search_mode=${encodeURIComponent(searchMode)}`;
+      const optimizedKeyword = await optimizeSearchQuery(keyword, activePlatform, apiKey, aiProvider, aiModel);
+      searchQuery = `[${activePlatform}] ${optimizedKeyword}`;
+      fetchUrl = `http://127.0.0.1:8000/scrape-social?platform=${encodeURIComponent(activePlatform)}&keyword=${encodeURIComponent(optimizedKeyword)}&limit=${limit}&search_mode=${encodeURIComponent(searchMode)}`;
     }
 
     const batchId = crypto.randomUUID();

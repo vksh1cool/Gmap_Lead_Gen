@@ -25,6 +25,7 @@ PLATFORM_DEFAULTS: Dict[str, tuple] = {
     "producthunt":  (2000, 1000),
     "quora":        (2000, 1000),
     "upwork":       (4000, 3000),
+    "darkweb":      (3000, 2000),
 }
 
 # Tier budget caps per platform per day
@@ -32,7 +33,7 @@ API_DAILY_CAP = 200
 BROWSER_DAILY_CAP = 25
 
 API_TIER = {"reddit", "hackernews", "devto", "stackoverflow"}
-BROWSER_TIER = {"twitter", "linkedin", "instagram", "producthunt", "quora", "upwork"}
+BROWSER_TIER = {"twitter", "linkedin", "instagram", "producthunt", "quora", "upwork", "darkweb"}
 
 # Circuit breaker constants
 CB_BASE_BACKOFF_S = 3 * 3600       # 3 hours

@@ -379,6 +379,7 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
     producthunt: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
     upwork: 'bg-green-500/20 text-green-400 border-green-500/30',
     gmaps: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+    darkweb: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
   };
   const platformColor = platformColors[lead.platform || 'gmaps'] || 'bg-gray-500/20 text-gray-400 border-gray-500/30';
 

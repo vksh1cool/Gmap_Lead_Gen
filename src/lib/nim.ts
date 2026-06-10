@@ -208,6 +208,68 @@ function ruleBasedScore(lead: RawLead): { score: number; category: string; ratio
   };
 }
 
+export async function optimizeSearchQuery(
+  rawInput: string,
+  platform: string,
+  apiKey?: string,
+  provider: 'nim' | 'openai' | 'gemini' = 'nim',
+  model: string = 'meta/llama-3.1-8b-instruct'
+): Promise<string> {
+  // If the input is already short, or we don't have an API key, just return the raw input
+  if (!apiKey || rawInput.split(' ').length <= 5) {
+    return rawInput;
+  }
+
+  let clientOptions: any = { apiKey };
+  
+  if (provider === 'nim') {
+    clientOptions.baseURL = 'https://integrate.api.nvidia.com/v1';
+  } else if (provider === 'gemini') {
+    clientOptions.baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+  }
+
+  const openai = new OpenAI(clientOptions);
+
+  const prompt = `
+You are an expert search query optimizer for web scraping.
+A user provided a long, rambling, or complex natural-language input. 
+Your goal is to extract the core intent and condense it into a highly targeted 3-to-5 word search query.
+This query will be sent to the search engines of platforms like Google Maps, Reddit, or Twitter.
+
+User Input: "${rawInput}"
+Target Platform: ${platform}
+
+CRITICAL RULES:
+1. ONLY output the optimized keywords. Nothing else. No quotes, no intro, no explanation.
+2. Remove conversational words (e.g., "I wanna scrape for", "where is the", "what are some").
+3. Keep it between 2 and 6 words maximum.
+4. Focus on the core entity, niche, or topic.
+
+Example User Input: "I am looking for dentists in austin texas that might need a new website built"
+Example Output: dentists austin texas website
+`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 20,
+    });
+
+    const optimized = response.choices[0]?.message?.content?.trim().replace(/^["']|["']$/g, '');
+    if (optimized && optimized.length > 0 && optimized.length < 100) {
+      console.log(`[Query Optimizer] Optimized "${rawInput.substring(0, 30)}..." -> "${optimized}"`);
+      return optimized;
+    }
+    return rawInput;
+  } catch (error) {
+    console.error("[Query Optimizer] AI Error:", error);
+    return rawInput;
+  }
+}
+
+
 export async function scoreLead(
   lead: RawLead,
   apiKey?: string,
@@ -409,5 +471,98 @@ Output this exact JSON structure (no markdown, no explanation):
       suggested_pitch: rules.pitch,
       suggested_subject: rules.subject,
     };
+  }
+}
+
+export interface IntentOption {
+  platform: string;
+  label: string;
+  niche?: string;
+  location?: string;
+  keyword?: string;
+}
+
+export async function analyzeIntent(
+  intent: string,
+  platforms: string[] = [],
+  niche?: string,
+  location?: string,
+  apiKey?: string,
+  provider: 'nim' | 'openai' | 'gemini' = 'nim',
+  model: string = 'meta/llama-3.1-8b-instruct'
+): Promise<IntentOption[]> {
+  if (!apiKey) {
+    throw new Error('API Key is required for intent analysis.');
+  }
+
+  let clientOptions: any = { apiKey };
+  
+  if (provider === 'nim') {
+    clientOptions.baseURL = 'https://integrate.api.nvidia.com/v1';
+  } else if (provider === 'gemini') {
+    clientOptions.baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+  }
+
+  const openai = new OpenAI(clientOptions);
+
+  const allLocation = ["gmaps"];
+  const allSocial = ["reddit", "x", "linkedin", "instagram", "hackernews", "devto", "darkweb"];
+  const allQa = ["stackoverflow", "quora", "producthunt", "upwork"];
+
+  const loc = allLocation.filter(p => !platforms.length || platforms.includes(p));
+  const soc = allSocial.filter(p => !platforms.length || platforms.includes(p));
+  const qa = allQa.filter(p => !platforms.length || platforms.includes(p));
+
+  let platformsStr = "Available platforms:\n";
+  if (loc.length) platformsStr += `- Location-based: ${loc.map(p => `"${p}"`).join(', ')}\n`;
+  if (soc.length) platformsStr += `- Social & Forums: ${soc.map(p => `"${p}"`).join(', ')}\n`;
+  if (qa.length) platformsStr += `- Q&A & Jobs: ${qa.map(p => `"${p}"`).join(', ')}\n`;
+
+  let constraintsStr = "";
+  if (platforms && platforms.length > 0) constraintsStr += `CRITICAL CONSTRAINT: You MUST restrict your output ONLY to the platforms listed above. Do not suggest anything else.\n`;
+  if (niche) constraintsStr += `CRITICAL CONSTRAINT: The user explicitly wants this Business Category/Niche: "${niche}". Ensure your gmaps options use this exact niche.\n`;
+  if (location) constraintsStr += `CRITICAL CONSTRAINT: The user explicitly wants this Target Location: "${location}". Ensure your gmaps options use this exact location.\n`;
+
+  const prompt = `
+You are an elite B2B Lead Generation Strategist. A user has provided a "dump" of their intent — explaining what kind of leads they want in natural language.
+Your goal is to parse this intent and generate a JSON array of specific, actionable scraping options across different platforms.
+
+User Intent: "${intent}"
+
+${platformsStr}
+${constraintsStr}
+
+Rules for generating options:
+1. Generate between 2 and 6 distinct options based on what the user asked for.
+2. If the user mentions a physical location or local business type (e.g., "plumbers in texas", "roofing"), ALWAYS include a "gmaps" option.
+   - For "gmaps", you MUST provide "niche" and "location".
+3. If the user mentions people complaining, asking for recommendations, or looking for help, include Social/Q&A platforms like "reddit", "x", "quora".
+   - For social/Q&A, you MUST provide "keyword" (a short, targeted search phrase).
+4. Each option MUST include a "label" which is a short, human-readable description (e.g., "Google Maps: Roofers in Austin, TX", "Reddit: Roof leak complaints").
+
+Output format MUST be exactly this JSON array (do NOT wrap in markdown \`\`\`json blocks, just the raw JSON):
+[
+  { "platform": "gmaps", "label": "Google Maps: Roofing companies in Texas", "niche": "roofing companies", "location": "Texas" },
+  { "platform": "reddit", "label": "Reddit: Roof leak complaints", "keyword": "roof leak complaints" }
+]
+`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+      max_tokens: 500,
+    });
+
+    const content = response.choices[0]?.message?.content || '[]';
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    const jsonString = jsonMatch ? jsonMatch[0] : '[]';
+    
+    const parsed = JSON.parse(jsonString) as IntentOption[];
+    return parsed;
+  } catch (error: any) {
+    console.error("[Intent Analyzer] AI Error:", error.message);
+    throw new Error('Failed to analyze intent using AI.');
   }
 }
