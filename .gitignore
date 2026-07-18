@@ -6,6 +6,8 @@
 .pnp.js
 /python_engine/venv/
 /python_engine/__pycache__/
+__pycache__/
+.serena/
 
 # testing
 /coverage
@@ -35,3 +37,11 @@ curl_out.json
 .env
 leads.json
 python_engine/serper_keys.json
+
+# AI key pool (contains secrets)
+ai_keys.json
+ai_keys.json.tmp
+
+# Runtime DB config (contains secrets) + AI cache
+db_config.json
+ai_cache.json

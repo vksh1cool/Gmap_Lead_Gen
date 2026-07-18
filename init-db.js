@@ -1,7 +1,12 @@
 const { Pool } = require('pg');
 
+if (!process.env.DATABASE_URL) {
+  console.error('DATABASE_URL is not set. Add it to .env.local (Neon serverless URL) and run with it loaded, e.g.:\n  node --env-file=.env.local init-db.js');
+  process.exit(1);
+}
+
 const pool = new Pool({
-  connectionString: 'postgresql://neondb_owner:npg_UyTm6rXYJE9O@ep-frosty-feather-aog13l94-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require',
+  connectionString: process.env.DATABASE_URL,
 });
 
 async function main() {

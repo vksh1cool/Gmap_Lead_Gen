@@ -1,7 +1,16 @@
-import OpenAI from 'openai';
 import { RawLead, ScoredLead } from './types';
+import { chatComplete, AiProvider } from './aiKeyPool';
 
-const MODEL = 'meta/llama-3.1-8b-instruct';
+// Preference hint carried from the UI/client into every LLM call. Keys come
+// from the server-side pool; these just bias which provider/model to try first,
+// plus an optional advanced client-key override.
+export interface AiPref {
+  preferProvider?: string;
+  preferModel?: string;
+  clientKey?: string;
+  clientProvider?: AiProvider;
+  clientModel?: string;
+}
 
 /**
  * Smart rule-based scoring engine. Works without any API key.
@@ -211,24 +220,12 @@ function ruleBasedScore(lead: RawLead): { score: number; category: string; ratio
 export async function optimizeSearchQuery(
   rawInput: string,
   platform: string,
-  apiKey?: string,
-  provider: 'nim' | 'openai' | 'gemini' = 'nim',
-  model: string = 'meta/llama-3.1-8b-instruct'
+  pref: AiPref = {},
 ): Promise<string> {
-  // If the input is already short, or we don't have an API key, just return the raw input
-  if (!apiKey || rawInput.split(' ').length <= 5) {
+  // If the input is already short, no need to spend a call optimizing it.
+  if (rawInput.split(' ').length <= 5) {
     return rawInput;
   }
-
-  let clientOptions: any = { apiKey };
-  
-  if (provider === 'nim') {
-    clientOptions.baseURL = 'https://integrate.api.nvidia.com/v1';
-  } else if (provider === 'gemini') {
-    clientOptions.baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-  }
-
-  const openai = new OpenAI(clientOptions);
 
   const prompt = `
 You are an expert search query optimizer for web scraping.
@@ -249,59 +246,46 @@ Example User Input: "I am looking for dentists in austin texas that might need a
 Example Output: dentists austin texas website
 `;
 
-  try {
-    const response = await openai.chat.completions.create({
-      model: model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 20,
-    });
-
-    const optimized = response.choices[0]?.message?.content?.trim().replace(/^["']|["']$/g, '');
-    if (optimized && optimized.length > 0 && optimized.length < 100) {
-      console.log(`[Query Optimizer] Optimized "${rawInput.substring(0, 30)}..." -> "${optimized}"`);
-      return optimized;
-    }
-    return rawInput;
-  } catch (error) {
-    console.error("[Query Optimizer] AI Error:", error);
-    return rawInput;
+  const res = await chatComplete(
+    [{ role: 'user', content: prompt }],
+    { temperature: 0.1, maxTokens: 20, ...toChatOpts(pref) },
+  );
+  if (!res) return rawInput;
+  const optimized = res.text.trim().replace(/^["']|["']$/g, '');
+  if (optimized && optimized.length > 0 && optimized.length < 100) {
+    console.log(`[Query Optimizer] Optimized "${rawInput.substring(0, 30)}..." -> "${optimized}"`);
+    return optimized;
   }
+  return rawInput;
+}
+
+// Map the UI preference hint into chatComplete's option shape.
+function toChatOpts(pref: AiPref) {
+  return {
+    preferProvider: pref.preferProvider,
+    preferModel: pref.preferModel,
+    clientKey: pref.clientKey,
+    clientProvider: pref.clientProvider,
+    clientModel: pref.clientModel,
+  };
 }
 
 
 export async function scoreLead(
   lead: RawLead,
-  apiKey?: string,
-  provider: 'nim' | 'openai' | 'gemini' = 'nim',
-  model: string = 'meta/llama-3.1-8b-instruct'
+  pref: AiPref = {},
 ): Promise<ScoredLead> {
   // Always compute rule-based score as baseline
   const rules = ruleBasedScore(lead);
 
-  if (!apiKey) {
-    return {
-      ...lead,
-      lead_score: rules.score,
-      lead_category: rules.category,
-      rationale: rules.rationale,
-      suggested_pitch: rules.pitch,
-      suggested_subject: rules.subject,
-    };
-  }
-
-  // If AI enhancement is requested but API key is missing, fail gracefully.
-  if (!apiKey) {
-    console.warn(`[AI Engine] Missing API Key for provider: ${provider}. Falling back to rule-based engine.`);
-    return {
-      ...lead,
-      lead_score: rules.score,
-      lead_category: rules.category,
-      rationale: rules.rationale,
-      suggested_pitch: rules.pitch,
-      suggested_subject: rules.subject,
-    };
-  }
+  const ruleFallback = (): ScoredLead => ({
+    ...lead,
+    lead_score: rules.score,
+    lead_category: rules.category,
+    rationale: rules.rationale,
+    suggested_pitch: rules.pitch,
+    suggested_subject: rules.subject,
+  });
 
   // Truncate massively long strings so they don't break the LLM Context Window (Token Limit)
   const safeSnippet = lead.about_snippet && lead.about_snippet.length > 1000 
@@ -317,17 +301,6 @@ export async function scoreLead(
     about_snippet: safeSnippet,
     emails_found: safeEmails
   };
-
-  let clientOptions: any = { apiKey };
-  
-  if (provider === 'nim') {
-    clientOptions.baseURL = 'https://integrate.api.nvidia.com/v1';
-  } else if (provider === 'gemini') {
-    clientOptions.baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-  }
-  // For openai, it uses default base URL
-
-  const openai = new OpenAI(clientOptions);
 
   const isSocial = lead.category === 'Social Post' || (lead.kind && lead.kind !== 'business_listing');
   const isJobListing = lead.kind === 'job';
@@ -435,42 +408,31 @@ Output this exact JSON structure (no markdown, no explanation):
 `;
   }
 
-  try {
-    const response = await openai.chat.completions.create({
-      model: model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 300,
-    });
+  const res = await chatComplete(
+    [{ role: 'user', content: prompt }],
+    { temperature: 0.2, maxTokens: 300, ...toChatOpts(pref) },
+  );
+  // No key available or every key failed → rule-based baseline.
+  if (!res) return ruleFallback();
 
-    const content = response.choices[0]?.message?.content || '{}';
-    
-    // Robust JSON extraction: Find the first { and last }
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
+  try {
+    // Robust JSON extraction: find the first { and last }.
+    const jsonMatch = res.text.match(/\{[\s\S]*\}/);
     const jsonString = jsonMatch ? jsonMatch[0] : '{}';
-    
     const parsed = JSON.parse(jsonString);
 
     return {
       ...lead,
-      lead_score: parsed.lead_score || rules.score,
+      lead_score: typeof parsed.lead_score === 'number' ? parsed.lead_score : rules.score,
       lead_category: parsed.lead_category || rules.category,
       rationale: parsed.rationale || rules.rationale,
-      suggested_pitch: parsed.suggested_pitch || rules.pitch,
+      suggested_pitch: parsed.suggested_pitch ?? rules.pitch,
       suggested_subject: parsed.suggested_subject || rules.subject,
       ...(parsed.pain_point ? { pain_point: parsed.pain_point } : {}),
     };
   } catch (error: any) {
-    console.error("AI Error:", error.message, "— falling back to rule-based scoring");
-    // Fallback to rule-based scoring (already computed)
-    return {
-      ...lead,
-      lead_score: rules.score,
-      lead_category: rules.category,
-      rationale: rules.rationale,
-      suggested_pitch: rules.pitch,
-      suggested_subject: rules.subject,
-    };
+    console.error("[AI] JSON parse failed — falling back to rule-based:", error.message);
+    return ruleFallback();
   }
 }
 
@@ -487,27 +449,11 @@ export async function analyzeIntent(
   platforms: string[] = [],
   niche?: string,
   location?: string,
-  apiKey?: string,
-  provider: 'nim' | 'openai' | 'gemini' = 'nim',
-  model: string = 'meta/llama-3.1-8b-instruct'
+  pref: AiPref = {},
 ): Promise<IntentOption[]> {
-  if (!apiKey) {
-    throw new Error('API Key is required for intent analysis.');
-  }
-
-  let clientOptions: any = { apiKey };
-  
-  if (provider === 'nim') {
-    clientOptions.baseURL = 'https://integrate.api.nvidia.com/v1';
-  } else if (provider === 'gemini') {
-    clientOptions.baseURL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-  }
-
-  const openai = new OpenAI(clientOptions);
-
   const allLocation = ["gmaps"];
-  const allSocial = ["reddit", "x", "linkedin", "instagram", "hackernews", "devto", "darkweb"];
-  const allQa = ["stackoverflow", "quora", "producthunt", "upwork"];
+  const allSocial = ["reddit", "x", "linkedin", "facebook", "instagram", "hackernews", "devto", "darkweb"];
+  const allQa = ["stackoverflow", "quora", "producthunt", "upwork", "indiamart", "justdial"];
 
   const loc = allLocation.filter(p => !platforms.length || platforms.includes(p));
   const soc = allSocial.filter(p => !platforms.length || platforms.includes(p));
@@ -547,22 +493,19 @@ Output format MUST be exactly this JSON array (do NOT wrap in markdown \`\`\`jso
 ]
 `;
 
+  const res = await chatComplete(
+    [{ role: 'user', content: prompt }],
+    { temperature: 0.2, maxTokens: 500, ...toChatOpts(pref) },
+  );
+  if (!res) {
+    throw new Error('No working AI key available. Add a Groq or NIM key in Settings → AI Key Pool (or .env.local).');
+  }
   try {
-    const response = await openai.chat.completions.create({
-      model: model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 500,
-    });
-
-    const content = response.choices[0]?.message?.content || '[]';
-    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    const jsonMatch = res.text.match(/\[[\s\S]*\]/);
     const jsonString = jsonMatch ? jsonMatch[0] : '[]';
-    
-    const parsed = JSON.parse(jsonString) as IntentOption[];
-    return parsed;
+    return JSON.parse(jsonString) as IntentOption[];
   } catch (error: any) {
-    console.error("[Intent Analyzer] AI Error:", error.message);
-    throw new Error('Failed to analyze intent using AI.');
+    console.error("[Intent Analyzer] JSON parse failed:", error.message);
+    throw new Error('AI returned an unparseable response. Try again.');
   }
 }

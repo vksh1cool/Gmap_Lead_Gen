@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { scoreLead, optimizeSearchQuery } from '@/lib/nim';
+import { scoreLead, optimizeSearchQuery, AiPref } from '@/lib/nim';
 import { query } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -8,10 +8,20 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto' } = body;
+    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName } = body;
 
     // Support comma-separated platforms (e.g. "reddit,x,linkedin") or single platform
     const activePlatform = platforms || platform;
+
+    // AI preference for this request. Keys live in the server pool (seeded from
+    // .env.local + added via the UI); these bias provider/model + optional override.
+    const aiPref: AiPref = {
+      preferProvider: aiProvider,
+      preferModel: aiModel,
+      clientKey: apiKey || undefined,
+      clientProvider: aiProvider,
+      clientModel: aiModel,
+    };
 
     let fetchUrl = '';
     let searchQuery = '';
@@ -20,14 +30,26 @@ export async function POST(req: NextRequest) {
       if (!niche || !location) {
         return NextResponse.json({ error: 'Missing niche/location for Gmaps' }, { status: 400 });
       }
-      const optimizedNiche = await optimizeSearchQuery(niche, 'Google Maps', apiKey, aiProvider, aiModel);
+      const optimizedNiche = await optimizeSearchQuery(niche, 'Google Maps', aiPref);
       searchQuery = `${optimizedNiche} in ${location}`;
       fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+    } else if (activePlatform === 'website') {
+      // HTTrack website mirror. The seed URL rides in websiteUrl (preferred) or
+      // falls back to keyword. No query optimization — it's a URL, not a search.
+      const seed = (websiteUrl || keyword || '').trim();
+      if (!seed) {
+        return NextResponse.json({ error: 'Missing website URL for the website mirror.' }, { status: 400 });
+      }
+      const depth = Math.max(1, Math.min(Number(crawlDepth) || 2, 4));
+      // Give deeper crawls a bigger time budget; keep it bounded.
+      const maxTime = Math.min(60 + depth * 30, 300);
+      searchQuery = `[website] ${seed}`;
+      fetchUrl = `http://127.0.0.1:8000/scrape-website?url=${encodeURIComponent(seed)}&depth=${depth}&max_time=${maxTime}`;
     } else {
       if (!keyword) {
         return NextResponse.json({ error: 'Missing keyword for social scrape' }, { status: 400 });
       }
-      const optimizedKeyword = await optimizeSearchQuery(keyword, activePlatform, apiKey, aiProvider, aiModel);
+      const optimizedKeyword = await optimizeSearchQuery(keyword, activePlatform, aiPref);
       searchQuery = `[${activePlatform}] ${optimizedKeyword}`;
       fetchUrl = `http://127.0.0.1:8000/scrape-social?platform=${encodeURIComponent(activePlatform)}&keyword=${encodeURIComponent(optimizedKeyword)}&limit=${limit}&search_mode=${encodeURIComponent(searchMode)}`;
     }
@@ -120,15 +142,21 @@ export async function POST(req: NextRequest) {
                 
                 // AI Score
                 console.log("Scoring lead:", rawLead.name);
-                const scoredLead = await scoreLead(rawLead, apiKey, aiProvider, aiModel);
+                const scoredLead = await scoreLead(rawLead, aiPref);
                 console.log("Scored lead:", scoredLead.name);
+
+                // Preserve fields the scorer may not echo back, so the live
+                // export (and CSV/Excel) has the Maps link + grouping metadata.
+                (scoredLead as any).google_maps_url = rawLead.google_maps_url || rawLead.url || (scoredLead as any).google_maps_url || null;
+                (scoredLead as any).group_name = (groupName && String(groupName).trim()) || null;
+                (scoredLead as any).location = location || null;
                 
                 // Save to DB (UPSERT) — includes all new social lead columns
                 try {
                   await query(
-                    `INSERT INTO gmaps_leads 
-                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
+                    `INSERT INTO gmaps_leads
+                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at, group_name, location, google_maps_url)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
                      ON CONFLICT (id) DO UPDATE SET
                       name = EXCLUDED.name,
                       address = EXCLUDED.address,
@@ -155,6 +183,9 @@ export async function POST(req: NextRequest) {
                       matched_keyword = EXCLUDED.matched_keyword,
                       pain_point = EXCLUDED.pain_point,
                       posted_at = EXCLUDED.posted_at,
+                      group_name = EXCLUDED.group_name,
+                      location = EXCLUDED.location,
+                      google_maps_url = EXCLUDED.google_maps_url,
                       scraped_at = CURRENT_TIMESTAMP`,
                     [
                       scoredLead.id,
@@ -187,6 +218,9 @@ export async function POST(req: NextRequest) {
                       scoredLead.matched_keyword || null,
                       scoredLead.pain_point || null,
                       scoredLead.posted_at || null,
+                      (groupName && String(groupName).trim()) || null,
+                      location || null,
+                      rawLead.google_maps_url || rawLead.url || null,
                     ]
                   );
                 } catch (dbError: any) {

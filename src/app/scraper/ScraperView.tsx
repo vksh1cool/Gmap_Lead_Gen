@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, Target, Download, Loader2, Mail, ExternalLink, Star, ShieldAlert, Key, Gem, Trophy, Trash2, Clock, Radio, CheckCircle2, Zap, User, Sparkles, CheckSquare, Square, Activity, MapPin, Navigation } from 'lucide-react';
 import { ScoredLead } from '@/lib/types';
+import { exportLeadsToExcel } from '@/lib/exportExcel';
 
 /* ── Animation variants ── */
 const containerVariants = {
@@ -67,9 +68,11 @@ interface PlatformDef {
 
 const PLATFORMS: PlatformDef[] = [
   { id: 'gmaps', label: 'Google Maps', emoji: '📍', color: 'border-emerald-400 bg-emerald-500/15 text-emerald-300', glowColor: 'shadow-emerald-500/25' },
+  { id: 'website', label: 'Website (HTTrack)', emoji: '🌐', color: 'border-teal-400 bg-teal-500/15 text-teal-300', glowColor: 'shadow-teal-500/25' },
   { id: 'reddit', label: 'Reddit', emoji: '🔶', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25' },
   { id: 'x', label: 'X / Twitter', emoji: '✕', color: 'border-gray-300 bg-white/10 text-gray-200', glowColor: 'shadow-white/15' },
   { id: 'linkedin', label: 'LinkedIn', emoji: '🔗', color: 'border-blue-400 bg-blue-500/15 text-blue-300', glowColor: 'shadow-blue-500/25' },
+  { id: 'facebook', label: 'Facebook', emoji: '📘', color: 'border-blue-500 bg-blue-600/15 text-blue-300', glowColor: 'shadow-blue-600/25' },
   { id: 'instagram', label: 'Instagram', emoji: '📸', color: 'border-pink-400 bg-pink-500/15 text-pink-300', glowColor: 'shadow-pink-500/25' },
   { id: 'hackernews', label: 'HackerNews', emoji: '🟧', color: 'border-orange-500 bg-orange-600/15 text-orange-400', glowColor: 'shadow-orange-600/25' },
   { id: 'devto', label: 'Dev.to', emoji: '⚡', color: 'border-indigo-400 bg-indigo-500/15 text-indigo-300', glowColor: 'shadow-indigo-500/25' },
@@ -78,6 +81,8 @@ const PLATFORMS: PlatformDef[] = [
   { id: 'quora', label: 'Quora', emoji: '💬', color: 'border-red-400 bg-red-500/15 text-red-300', glowColor: 'shadow-red-500/25' },
   { id: 'producthunt', label: 'ProductHunt', emoji: '🚀', color: 'border-orange-400 bg-orange-500/15 text-orange-300', glowColor: 'shadow-orange-500/25' },
   { id: 'upwork', label: 'Upwork', emoji: '💼', color: 'border-green-400 bg-green-500/15 text-green-300', glowColor: 'shadow-green-500/25' },
+  { id: 'indiamart', label: 'IndiaMART', emoji: '🇮🇳', color: 'border-amber-400 bg-amber-500/15 text-amber-300', glowColor: 'shadow-amber-500/25' },
+  { id: 'justdial', label: 'Justdial', emoji: '📒', color: 'border-sky-400 bg-sky-500/15 text-sky-300', glowColor: 'shadow-sky-500/25' },
 ];
 
 function getPlatformBadge(platformId: string) {
@@ -136,10 +141,17 @@ export default function Home() {
   };
 
   const selectAll = () => setSelectedPlatforms(PLATFORMS.map(p => p.id));
-  const selectSocialOnly = () => setSelectedPlatforms(PLATFORMS.filter(p => p.id !== 'gmaps').map(p => p.id));
+  const selectSocialOnly = () => setSelectedPlatforms(PLATFORMS.filter(p => p.id !== 'gmaps' && p.id !== 'website').map(p => p.id));
 
   const [niche, setNiche] = useState('');
   const [location, setLocation] = useState('');
+
+  // ── Lead group (for organizing + Excel export filename) ──
+  const [groupName, setGroupName] = useState('');
+
+  // ── Website (HTTrack) state ──
+  const [websiteUrls, setWebsiteUrls] = useState('');
+  const [crawlDepth, setCrawlDepth] = useState<number>(2);
 
   const [isScraping, setIsScraping] = useState(false);
   const [leads, setLeads] = useState<ScoredLead[]>([]);
@@ -160,12 +172,17 @@ export default function Home() {
   const elapsed = useElapsedTimer(isScraping);
 
   useEffect(() => {
-    const provider = localStorage.getItem('ai_provider') || 'nim';
+    // Empty default = no provider bias, so the server pool round-robins evenly
+    // across every key (Groq + NIM together). A saved preference still wins.
+    const provider = localStorage.getItem('ai_provider') || '';
     setAiProvider(provider);
     
     let key = '';
     let model = '';
-    if (provider === 'nim') {
+    if (provider === 'groq') {
+      key = localStorage.getItem('groq_api_key') || '';
+      model = localStorage.getItem('groq_model') || 'llama-3.3-70b-versatile';
+    } else if (provider === 'nim') {
       key = localStorage.getItem('nim_api_key') || '';
       model = localStorage.getItem('nim_model') || 'meta/llama-3.1-8b-instruct';
     } else if (provider === 'openai') {
@@ -175,7 +192,8 @@ export default function Home() {
       key = localStorage.getItem('gemini_api_key') || '';
       model = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
     }
-    
+
+    // Empty key is fine — the server falls back to .env.local (groq_api_key/nim_key).
     setApiKey(key);
     setAiModel(model);
   }, []);
@@ -259,22 +277,48 @@ export default function Home() {
     }
   };
 
+  // Build website-mirror options straight from the URL box (no AI needed).
+  const buildWebsiteOptions = (): any[] => {
+    if (!selectedPlatforms.includes('website')) return [];
+    return websiteUrls
+      .split(/[\n,]+/)
+      .map(u => u.trim())
+      .filter(Boolean)
+      .map(url => {
+        const display = url.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        return {
+          platform: 'website',
+          label: `Mirror ${display}`,
+          websiteUrl: url,
+          crawlDepth,
+        };
+      });
+  };
+
   const handleAnalyzeIntent = async () => {
-    if (!intentDump.trim()) return;
+    const websiteOptions = buildWebsiteOptions();
+    // Nothing to do if there's neither an intent to analyze nor URLs to mirror.
+    if (!intentDump.trim() && websiteOptions.length === 0) return;
+
     setIsAnalyzingIntent(true);
     setGeneratedOptions([]);
     setSelectedOptionIndices([]);
     try {
-      const res = await fetch('/api/analyze-intent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ intent: intentDump, platforms: selectedPlatforms, niche, location, apiKey, aiProvider, aiModel }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setGeneratedOptions(data.options || []);
+      let aiOptions: any[] = [];
+      if (intentDump.trim()) {
+        const res = await fetch('/api/analyze-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ intent: intentDump, platforms: selectedPlatforms, niche, location, apiKey, aiProvider, aiModel }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        aiOptions = data.options || [];
+      }
+      const combined = [...websiteOptions, ...aiOptions];
+      setGeneratedOptions(combined);
       // Auto-select all generated options
-      setSelectedOptionIndices((data.options || []).map((_: any, i: number) => i));
+      setSelectedOptionIndices(combined.map((_: any, i: number) => i));
     } catch (err: any) {
       console.error(err);
       alert('Failed to analyze intent: ' + err.message);
@@ -307,6 +351,9 @@ export default function Home() {
           niche: option.niche || niche,
           location: option.location || location,
           keyword: option.keyword,
+          websiteUrl: option.websiteUrl,
+          crawlDepth: option.crawlDepth,
+          groupName,
           limit,
           apiKey,
           aiProvider,
@@ -333,50 +380,18 @@ export default function Home() {
     }
   };
 
-  const exportCSV = () => {
+  const exportExcel = () => {
     if (leads.length === 0) return;
     try {
-      const csvData = leads.map(l => ({
-        Name: l.name,
-        Platform: l.platform || 'gmaps',
-        Score: l.lead_score,
-        Category: l.lead_category || '',
-        Business_Category: l.category || '',
-        Rating: l.rating || '',
-        Reviews: l.reviews || '',
-        Phone: l.phone || '',
-        Website: l.website || '',
-        Emails: l.emails_found?.join(', ') || '',
-        Author: l.author || '',
-        Post_URL: l.post_url || '',
-        Title: l.title || '',
-        Pitch: l.suggested_pitch || '',
-        Rationale: l.rationale || '',
-      }));
-      
-      const headers = Object.keys(csvData[0]);
-      const csvRows = [];
-      csvRows.push(headers.join(','));
-      
-      for (const row of csvData) {
-        const values = headers.map(header => {
-          const val = (row as any)[header] ?? '';
-          const escaped = val.toString().replace(/"/g, '""');
-          return `"${escaped}"`;
-        });
-        csvRows.push(values.join(','));
-      }
-      
-      const csv = csvRows.join('\n');
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `leads-smart-intent-${Date.now()}.csv`.replace(/\s+/g, '_');
-      a.click();
+      const filename = exportLeadsToExcel(leads, {
+        groupName: groupName || niche || 'Leads',
+        cityState: location,
+        sheetName: groupName || 'Leads',
+      });
+      setProgress(`Exported ${leads.length} leads → ${filename}`);
     } catch (err) {
       console.error(err);
-      alert('Failed to export CSV');
+      alert('Failed to export Excel');
     }
   };
 
@@ -448,7 +463,7 @@ export default function Home() {
             <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-cyan-400 to-emerald-400 bg-clip-text text-transparent">
               LaunchPixel Smart Engine
             </h1>
-            <p className="text-gray-400 text-sm">Tell the AI what you want, and it will generate specific lead targets for you.</p>
+            <p className="text-gray-400 text-sm">Maps businesses, social intent, and full-site mirroring — describe what you want, pick your sources, and the engine finds & scores leads.</p>
           </div>
           <AnimatePresence>
             {leads.length > 0 && (
@@ -459,11 +474,11 @@ export default function Home() {
                 className="flex items-center gap-3"
               >
                 <button
-                  id="btn-export-csv"
-                  onClick={exportCSV}
-                  className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-full transition-all text-sm font-medium backdrop-blur-sm"
+                  id="btn-export-excel"
+                  onClick={exportExcel}
+                  className="flex items-center gap-2 px-6 py-3 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-300 rounded-full transition-all text-sm font-medium backdrop-blur-sm"
                 >
-                  <Download className="w-4 h-4" /> Export CSV ({leads.length})
+                  <Download className="w-4 h-4" /> Export Excel ({leads.length})
                 </button>
               </motion.div>
             )}
@@ -518,6 +533,20 @@ export default function Home() {
 
           {/* Intent Dump Section */}
           <div className="space-y-4 relative z-10">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+                <Trophy className="w-4 h-4" /> Lead Group Name
+                <span className="text-[10px] normal-case font-normal text-gray-500">— names this batch & the exported file</span>
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. RealEstateLeads (→ RealEstateLeads_Mumbai_17Jul2026.xlsx)"
+                value={groupName}
+                onChange={(e) => setGroupName(e.target.value)}
+                className="w-full bg-black/40 border border-emerald-500/20 rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+              />
+            </div>
+
             <label className="text-sm font-semibold text-indigo-300 uppercase tracking-wider flex items-center gap-2">
               <Sparkles className="w-4 h-4" /> Smart Intent Dump
             </label>
@@ -586,10 +615,54 @@ export default function Home() {
               )}
             </AnimatePresence>
 
+            <AnimatePresence>
+              {selectedPlatforms.includes('website') && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="space-y-2 pt-2"
+                >
+                  <label className="text-xs font-semibold text-teal-300 uppercase tracking-wider flex items-center gap-2">
+                    <ExternalLink className="w-3 h-3" /> Website URLs to Mirror (HTTrack)
+                  </label>
+                  <textarea
+                    placeholder={"One URL per line — e.g.\nacmeroofing.com\nhttps://competitor.io/about"}
+                    value={websiteUrls}
+                    onChange={(e) => setWebsiteUrls(e.target.value)}
+                    rows={3}
+                    className="w-full bg-black/40 border border-teal-500/30 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner resize-y font-mono"
+                  />
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-gray-400">Crawl depth</label>
+                    <div className="flex gap-1.5">
+                      {[1, 2, 3, 4].map(d => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setCrawlDepth(d)}
+                          className={`w-8 h-8 rounded-lg text-xs font-bold border transition-all ${
+                            crawlDepth === d
+                              ? 'bg-teal-500/20 border-teal-400 text-teal-300'
+                              : 'bg-black/40 border-white/10 text-gray-500 hover:border-white/20'
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-gray-600">
+                      Higher depth = more pages, more contacts, slower.
+                    </span>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             <button
               type="button"
               onClick={handleAnalyzeIntent}
-              disabled={isAnalyzingIntent || !intentDump.trim()}
+              disabled={isAnalyzingIntent || (!intentDump.trim() && !(selectedPlatforms.includes('website') && websiteUrls.trim()))}
               className={`
                 px-6 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white
                 ${isAnalyzingIntent || !intentDump.trim()
@@ -669,7 +742,7 @@ export default function Home() {
                   id="input-limit"
                   type="number"
                   min="1"
-                  max="200"
+                  max="1000"
                   value={limit}
                   onChange={(e) => setLimit(Number(e.target.value))}
                   className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
@@ -854,6 +927,32 @@ export default function Home() {
           )}
         </AnimatePresence>
 
+        {/* Idle empty state — shown before any run */}
+        <AnimatePresence>
+          {!isScraping && stage === 'idle' && leads.length === 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="grid grid-cols-1 md:grid-cols-3 gap-4"
+            >
+              {[
+                { icon: <MapPin className="w-5 h-5 text-emerald-400" />, title: 'Maps Businesses', body: 'Pick Google Maps, set a niche + location. Pulls listings with phone, site, rating and crawls each site for emails.', ring: 'border-emerald-500/20 hover:border-emerald-500/40' },
+                { icon: <Sparkles className="w-5 h-5 text-indigo-400" />, title: 'Social Intent', body: 'Reddit, X, LinkedIn, HackerNews & more. Describe a pain point and the AI dorks each platform for people to reach.', ring: 'border-indigo-500/20 hover:border-indigo-500/40' },
+                { icon: <ExternalLink className="w-5 h-5 text-teal-400" />, title: 'Website Mirror', body: 'Paste any URL. HTTrack mirrors the whole site and harvests every email, phone and social profile it can find.', ring: 'border-teal-500/20 hover:border-teal-500/40' },
+              ].map((c) => (
+                <div key={c.title} className={`rounded-2xl border bg-white/[0.02] p-5 transition-all ${c.ring}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center">{c.icon}</div>
+                    <h3 className="text-sm font-semibold text-white">{c.title}</h3>
+                  </div>
+                  <p className="text-xs text-gray-400 leading-relaxed">{c.body}</p>
+                </div>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Inbox Style Leads View */}
         <AnimatePresence>
           {leads.length > 0 && (
@@ -879,7 +978,8 @@ export default function Home() {
                 <AnimatePresence mode="popLayout">
                   {leads.map((lead) => {
                     const badge = getPlatformBadge(lead.platform || 'gmaps');
-                    const isSocialLead = lead.platform && lead.platform !== 'gmaps';
+                    const isWebsiteLead = lead.platform === 'website';
+                    const isSocialLead = !!lead.platform && lead.platform !== 'gmaps' && !isWebsiteLead;
                     const isJobLead = lead.kind === 'job' || lead.platform === 'upwork';
 
                     return (
@@ -925,6 +1025,11 @@ export default function Home() {
                               </h3>
                               {!isSocialLead && lead.address && (
                                 <p className="text-gray-400 text-sm mt-1">{lead.address}</p>
+                              )}
+                              {isWebsiteLead && lead.about_snippet && (
+                                <p className="text-sm text-gray-400 leading-relaxed line-clamp-2 mt-2 bg-white/[0.03] rounded-lg p-3 border border-white/[0.05]">
+                                  {lead.about_snippet}
+                                </p>
                               )}
                               {isSocialLead && (
                                 <div className="mt-2 space-y-1.5">
@@ -991,9 +1096,17 @@ export default function Home() {
                                 {isJobLead ? 'View Job' : 'View Original Post'}
                               </a>
                             )}
+                            {isWebsiteLead && lead.reviews && lead.reviews !== 'N/A' && (
+                              <div className="flex items-center gap-1 bg-teal-500/15 px-2.5 py-1 rounded-md border border-teal-500/30 text-teal-300">
+                                <Search className="w-3.5 h-3.5" /> {lead.reviews} pages crawled
+                              </div>
+                            )}
                             {lead.emails_found && lead.emails_found.length > 0 && (
                               <div className="flex items-center gap-1 bg-indigo-500/20 px-2.5 py-1 rounded-md border border-indigo-500/30 text-indigo-300">
                                 <Mail className="w-3.5 h-3.5" /> {lead.emails_found[0]}
+                                {lead.emails_found.length > 1 && (
+                                  <span className="ml-1 text-[10px] font-bold text-indigo-400">+{lead.emails_found.length - 1}</span>
+                                )}
                               </div>
                             )}
                             {lead.socials && lead.socials.length > 0 && lead.socials.map((social, idx) => (

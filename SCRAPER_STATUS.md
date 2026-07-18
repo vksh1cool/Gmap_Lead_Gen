@@ -36,6 +36,7 @@ public IP from your ISP. Hammering search engines from it gets that IP rate-limi
 | Platform        | With recommended keys | Keyless fallback | Path |
 |-----------------|----------------------|------------------|------|
 | **Google Maps** | ✅ Reliable | ✅ Reliable | Playwright + stealth (no search engine needed) |
+| **Website (HTTrack)** | ✅ Reliable | ✅ Reliable | HTTrack site mirror → email/phone/social harvest (needs `httrack` binary) |
 | **HackerNews**  | ✅ Reliable | ✅ Reliable | Algolia API |
 | **StackOverflow** | ✅ Reliable | ✅ Reliable | Official API |
 | **Dev.to**      | ✅ Reliable | ✅ Reliable | Official Forem API |
@@ -45,6 +46,8 @@ public IP from your ISP. Hammering search engines from it gets that IP rate-limi
 | **Instagram**   | ✅ Reliable (Serper) | ⚠️ Best-effort | dork |
 | **Quora**       | ✅ Reliable (Serper) | ⚠️ Best-effort | dork |
 | **Upwork**      | ✅ Reliable (Serper) | ⚠️ Best-effort | dork |
+| **IndiaMART**   | ✅ Reliable (Serper) | ⚠️ Best-effort | `site:indiamart.com` dork (listing name + URL) |
+| **Justdial**    | ✅ Reliable (Serper) | ⚠️ Best-effort | `site:justdial.com` dork (listing name + URL) |
 | **X / Twitter** | ⚠️ Nitter mirrors | ⚠️ Nitter mirrors | No free API exists; mirror fallback (set `NITTER_INSTANCES`) |
 
 ## Search backend chain (for the dork platforms)

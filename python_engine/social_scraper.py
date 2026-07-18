@@ -19,8 +19,14 @@ logger = logging.getLogger(__name__)
 DORK_SITES = {
     "linkedin": "linkedin.com",
     "instagram": "instagram.com",
+    "facebook": "facebook.com",
     "quora": "quora.com",
     "upwork": "upwork.com",
+    # Indian B2B directories — best-effort via `site:` search. Yields business
+    # name + listing URL; deep fields (revealed phone) need native scraping,
+    # tracked as a future enhancement.
+    "indiamart": "indiamart.com",
+    "justdial": "justdial.com",
 }
 
 # What "all" expands to — a fast, mostly-reliable spread.
@@ -29,8 +35,9 @@ ALL_PLATFORMS = ["reddit", "x", "hackernews", "devto", "stackoverflow", "linkedi
 # Friendly platform labels for the rate-limit dialog.
 PLATFORM_LABELS = {
     "x": "X / Twitter", "linkedin": "LinkedIn", "instagram": "Instagram",
+    "facebook": "Facebook",
     "quora": "Quora", "producthunt": "ProductHunt", "upwork": "Upwork", "reddit": "Reddit",
-    "darkweb": "Dark Web / Tor",
+    "darkweb": "Dark Web / Tor", "indiamart": "IndiaMART", "justdial": "Justdial",
 }
 
 

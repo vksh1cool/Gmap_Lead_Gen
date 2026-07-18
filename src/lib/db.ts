@@ -1,24 +1,125 @@
 import { Pool } from 'pg';
+import fs from 'fs';
+import path from 'path';
 
-const connectionString = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_UyTm6rXYJE9O@ep-frosty-feather-aog13l94-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+/**
+ * Unified Postgres access.
+ *
+ * Connection string precedence:
+ *   1. DATABASE_URL env var (the way a team shares config via .env.local)
+ *   2. A URL saved through the Settings → Database UI (gitignored db_config.json)
+ *
+ * No credential is hardcoded — an open-source clone must supply its own Neon
+ * (or any Postgres) serverless URL. If none is configured, queries throw
+ * DbNotConfiguredError and callers degrade gracefully instead of crashing.
+ */
 
-if (!connectionString) {
-  console.error("Missing DATABASE_URL in environment variables.");
+const CONFIG_FILE = path.join(process.cwd(), 'db_config.json');
+
+export class DbNotConfiguredError extends Error {
+  constructor() {
+    super('No database configured. Set DATABASE_URL in .env.local or add a Neon URL in Settings → Database.');
+    this.name = 'DbNotConfiguredError';
+  }
 }
 
-const pool = new Pool({
-  connectionString,
-});
+function savedUrl(): string | null {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const u = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')).url;
+      if (u && String(u).trim()) return String(u).trim();
+    }
+  } catch { /* ignore */ }
+  return null;
+}
 
-// Lazily ensure the schema exists/upgraded exactly once per process, so a fresh
-// Neon DB (or a deploy that adds columns) self-heals on first query instead of
-// silently 500-ing with "column ... does not exist".
+export function connectionSource(): 'env' | 'saved' | null {
+  if (process.env.DATABASE_URL && process.env.DATABASE_URL.trim()) return 'env';
+  if (savedUrl()) return 'saved';
+  return null;
+}
+
+export function getConnectionString(): string | null {
+  return (process.env.DATABASE_URL && process.env.DATABASE_URL.trim()) || savedUrl() || null;
+}
+
+export function isDbConfigured(): boolean {
+  return !!getConnectionString();
+}
+
+/** Mask a connection string for display (hide the password). */
+export function maskConnectionString(cs: string): string {
+  try {
+    return cs.replace(/:\/\/([^:]+):([^@]+)@/, (_m, user) => `://${user}:••••@`);
+  } catch {
+    return '••••';
+  }
+}
+
+// Lazy pool, recreated if the configured URL changes (e.g. saved via UI).
+let pool: Pool | null = null;
+let poolUrl: string | null = null;
 let schemaReady: Promise<void> | null = null;
+
+function getPool(): Pool | null {
+  const cs = getConnectionString();
+  if (!cs) return null;
+  if (!pool || poolUrl !== cs) {
+    if (pool) pool.end().catch(() => {});
+    pool = new Pool({ connectionString: cs });
+    poolUrl = cs;
+    schemaReady = null; // force a schema (re-)init against the new database
+  }
+  return pool;
+}
+
+/** Persist a UI-supplied URL (used only when DATABASE_URL env is absent). */
+export function saveDbUrl(url: string) {
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ url: url.trim() }, null, 2));
+  // Invalidate the pool so the next query reconnects with the new URL.
+  if (pool) { pool.end().catch(() => {}); pool = null; poolUrl = null; schemaReady = null; }
+}
+
+export function clearSavedDbUrl() {
+  try { fs.unlinkSync(CONFIG_FILE); } catch { /* ignore */ }
+  if (pool) { pool.end().catch(() => {}); pool = null; poolUrl = null; schemaReady = null; }
+}
+
+/** Live health check. Returns ok + optional error, without throwing. */
+export async function pingDb(): Promise<{ ok: boolean; configured: boolean; source: string | null; error?: string; masked?: string }> {
+  const cs = getConnectionString();
+  const source = connectionSource();
+  if (!cs) return { ok: false, configured: false, source: null };
+  const p = getPool();
+  try {
+    await p!.query('SELECT 1');
+    return { ok: true, configured: true, source, masked: maskConnectionString(cs) };
+  } catch (e: any) {
+    return { ok: false, configured: true, source, error: e.message, masked: maskConnectionString(cs) };
+  }
+}
+
+/** Validate a candidate connection string by opening a throwaway connection. */
+export async function testDbUrl(url: string): Promise<{ ok: boolean; error?: string }> {
+  url = (url || '').trim();
+  if (!/^postgres(ql)?:\/\//i.test(url)) {
+    return { ok: false, error: 'URL must start with postgresql:// (copy the Neon connection string).' };
+  }
+  const tmp = new Pool({ connectionString: url, max: 1, connectionTimeoutMillis: 8000 });
+  try {
+    await tmp.query('SELECT 1');
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  } finally {
+    tmp.end().catch(() => {});
+  }
+}
+
 function ensureSchema(): Promise<void> {
   if (!schemaReady) {
     schemaReady = initDB().catch((e) => {
-      // Don't permanently cache a failure — allow a retry on the next query.
-      schemaReady = null;
+      schemaReady = null; // allow a retry on the next query
       console.error('Schema init failed:', e);
     });
   }
@@ -26,12 +127,16 @@ function ensureSchema(): Promise<void> {
 }
 
 export async function query(text: string, params?: any[]) {
+  const p = getPool();
+  if (!p) throw new DbNotConfiguredError();
   await ensureSchema();
-  return pool.query(text, params);
+  return p.query(text, params);
 }
 
-// Function to initialize the database table if it doesn't exist
+// Initialize / upgrade the unified leads table. Idempotent.
 export async function initDB() {
+  const p = getPool();
+  if (!p) throw new DbNotConfiguredError();
   const createTableQuery = `
     CREATE TABLE IF NOT EXISTS gmaps_leads (
       id VARCHAR(255) PRIMARY KEY,
@@ -73,12 +178,16 @@ export async function initDB() {
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS suggested_subject TEXT;
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS batch_id TEXT;
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS search_query TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS group_name TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS location TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS google_maps_url TEXT;
   `;
   try {
-    await pool.query(createTableQuery);
-    await pool.query(alterTableQuery);
+    await p.query(createTableQuery);
+    await p.query(alterTableQuery);
     console.log('Database initialized: gmaps_leads table is ready with all fields.');
   } catch (error) {
     console.error('Error initializing database:', error);
+    throw error;
   }
 }

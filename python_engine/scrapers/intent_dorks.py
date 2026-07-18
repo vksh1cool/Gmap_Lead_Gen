@@ -25,7 +25,10 @@ LINKEDIN_INTENT_SUFFIXES = [
     '"hiring"',
     '"looking for recommendations"',
     '"can anyone recommend"',
-    '"need help with"'
+    '"need help with"',
+    # Decision-maker targeting (idea borrowed from OpenOutreach's ICP approach):
+    # surface the person who can actually buy, not just any post.
+    '("founder" OR "CEO" OR "owner" OR "co-founder" OR "head of" OR "director")',
 ]
 
 def expand_keyword_to_dorks(platform: str, site_domain: str, keyword: str) -> List[str]:

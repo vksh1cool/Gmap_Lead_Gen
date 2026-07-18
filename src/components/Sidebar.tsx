@@ -10,6 +10,23 @@ export default function Sidebar() {
   const searchParams = useSearchParams();
   const currentTab = searchParams.get("tab") || "dashboard";
   const [leadCount, setLeadCount] = useState<number | null>(null);
+  const [engineOnline, setEngineOnline] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ping = async () => {
+      try {
+        const res = await fetch("/api/engine-status", { cache: "no-store" });
+        const data = await res.json();
+        if (!cancelled) setEngineOnline(!!data.online);
+      } catch {
+        if (!cancelled) setEngineOnline(false);
+      }
+    };
+    ping();
+    const interval = setInterval(ping, 10_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   useEffect(() => {
     const fetchLeadCount = async () => {
@@ -106,37 +123,46 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Local Engine Status */}
+      {/* Local Engine Status — reflects a live health probe of the Python engine */}
       <div className="p-5 border-t border-border/40 bg-white/[0.03]">
         <motion.div
-          className="flex items-center justify-between p-3 rounded-xl bg-black/40 border border-emerald-500/10"
-          animate={{
+          className={`flex items-center justify-between p-3 rounded-xl bg-black/40 border ${
+            engineOnline ? "border-emerald-500/10" : engineOnline === false ? "border-red-500/20" : "border-white/10"
+          }`}
+          animate={engineOnline ? {
             boxShadow: [
               "0 0 0px rgba(16,185,129,0)",
               "0 0 15px rgba(16,185,129,0.08)",
               "0 0 0px rgba(16,185,129,0)",
             ],
-          }}
-          transition={{
-            duration: 3,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
+          } : {}}
+          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
         >
           <div className="flex items-center gap-3">
             <div className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              {engineOnline && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              )}
+              <span className={`relative inline-flex rounded-full h-3 w-3 ${
+                engineOnline ? "bg-emerald-500" : engineOnline === false ? "bg-red-500" : "bg-gray-500"
+              }`}></span>
             </div>
             <div>
               <p className="text-xs font-medium text-white/90">Local Engine</p>
-              <p className="text-[10px] text-emerald-400/80 font-mono tracking-wider">
-                ONLINE
+              <p className={`text-[10px] font-mono tracking-wider ${
+                engineOnline ? "text-emerald-400/80" : engineOnline === false ? "text-red-400/80" : "text-gray-400/80"
+              }`}>
+                {engineOnline ? "ONLINE" : engineOnline === false ? "OFFLINE" : "CHECKING…"}
               </p>
             </div>
           </div>
-          <Activity size={16} className="text-emerald-500/50" />
+          <Activity size={16} className={engineOnline ? "text-emerald-500/50" : engineOnline === false ? "text-red-500/50" : "text-gray-500/50"} />
         </motion.div>
+        {engineOnline === false && (
+          <p className="mt-2 text-[10px] text-gray-500 leading-relaxed">
+            Start it: <code className="text-gray-400">uvicorn main:app --port 8000</code>
+          </p>
+        )}
       </div>
 
       {/* Footer */}

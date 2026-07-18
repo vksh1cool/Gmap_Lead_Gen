@@ -17,6 +17,8 @@ from playwright_stealth import Stealth
 from pydantic import BaseModel
 from social_scraper import scrape_social_orchestrator
 from scrapers.serper_keys import key_manager
+from scrapers.website_mirror import scrape_website_mirror
+from scrapers.extract import extract_emails, extract_socials
 
 async def stealth_async(page):
     await Stealth().apply_stealth_async(page)
@@ -112,14 +114,12 @@ async def crawl_website(url: str, context: BrowserContext, engine: AntiBanEngine
         await engine.human_delay(500, 1500)
         await page.goto(url, timeout=10000, wait_until="domcontentloaded")
         content = await page.content()
-        # Emails
-        for match in re.findall(EMAIL_REGEX, content):
-            match_lower = match.lower()
-            if not match_lower.endswith('.png') and not match_lower.endswith('.jpg') and 'sentry' not in match_lower and 'wixpress' not in match_lower:
-                emails.add(match)
-        # Socials
-        for match in re.finditer(SOCIAL_REGEX, content):
-            socials.add(match.group(0))
+        # Emails + socials via the shared, well-filtered extractors
+        # (de-obfuscation + junk blocklist — same logic the HTTrack mirror uses).
+        for e in extract_emails(content):
+            emails.add(e)
+        for s in extract_socials(content):
+            socials.add(s)
         # About snippet (grab first 3 paragraphs)
         paragraphs = await page.locator('p').all_text_contents()
         valid_p = [p.strip() for p in paragraphs if len(p.strip()) > 30]
@@ -222,6 +222,7 @@ async def process_business_url(href: str, context: BrowserContext, engine: AntiB
             "phone": phone,
             "address": address,
             "url": href,
+            "google_maps_url": href,
             "is_claimed": is_claimed,
             "emails_found": emails,
             "socials": socials,
@@ -366,5 +367,19 @@ async def stream_social_leads(platform: str, keyword: str, limit: int, search_mo
 async def scrape_social_endpoint(platform: str, keyword: str, limit: int = 10, search_mode: str = "auto"):
     return StreamingResponse(
         stream_social_leads(platform, keyword, limit, search_mode),
+        media_type="application/x-ndjson"
+    )
+
+
+async def stream_website_leads(url: str, depth: int, max_time: int):
+    """Mirror a website with HTTrack and stream extracted contact leads as NDJSON."""
+    async for event in scrape_website_mirror(url, depth=depth, max_time=max_time):
+        yield json.dumps(event) + "\n"
+
+
+@app.get("/scrape-website")
+async def scrape_website_endpoint(url: str, depth: int = 2, max_time: int = 90):
+    return StreamingResponse(
+        stream_website_leads(url, depth, max_time),
         media_type="application/x-ndjson"
     )

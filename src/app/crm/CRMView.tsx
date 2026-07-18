@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Loader2, Mail, Globe, Brain, User, Target, ChevronDown, Phone, MapPin, Search, Trash2, ChevronRight, Briefcase, ExternalLink } from "lucide-react";
+import { Loader2, Mail, Globe, Brain, User, Target, ChevronDown, Phone, MapPin, Search, Trash2, ChevronRight, Briefcase, ExternalLink, Download } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
+import { exportLeadsToExcel } from "@/lib/exportExcel";
 
 // Smart link detection
 function detectLinkType(url: string): { type: string; label: string; color: string; hoverColor: string } {
@@ -66,6 +67,13 @@ interface Lead {
   pain_point?: string;
   posted_at?: string;
   external_id?: string;
+  group_name?: string;
+  location?: string;
+  google_maps_url?: string;
+  rating?: string;
+  reviews?: string;
+  category?: string;
+  rationale?: string;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -165,23 +173,57 @@ export default function CRMPage() {
     return matchesSearch && matchesStatus && matchesPlatform;
   });
 
-  // Group leads by batch_id
-  const groupedLeads: Record<string, { batch_id: string, search_query: string, scraped_at: string, leads: Lead[] }> = {};
-  
+  // Group leads by the user's Lead Group name when present, else by batch_id.
+  // This is the "scraped lead group" unit users download & manage.
+  const groupedLeads: Record<string, { key: string, group_name: string | null, batch_id: string, search_query: string, location: string, scraped_at: string, leads: Lead[] }> = {};
+
   filteredLeads.forEach(lead => {
-    const batchId = lead.batch_id || 'manual_entry';
-    if (!groupedLeads[batchId]) {
-      groupedLeads[batchId] = {
-        batch_id: batchId,
+    const key = lead.group_name?.trim() ? `group:${lead.group_name.trim()}` : `batch:${lead.batch_id || 'manual_entry'}`;
+    if (!groupedLeads[key]) {
+      groupedLeads[key] = {
+        key,
+        group_name: lead.group_name?.trim() || null,
+        batch_id: lead.batch_id || 'manual_entry',
         search_query: lead.search_query || 'Unknown Search',
+        location: lead.location || '',
         scraped_at: lead.scraped_at || new Date().toISOString(),
         leads: []
       };
     }
-    groupedLeads[batchId].leads.push(lead);
+    // Keep the most recent scrape time and a location for the group.
+    if (lead.scraped_at && new Date(lead.scraped_at).getTime() > new Date(groupedLeads[key].scraped_at).getTime()) {
+      groupedLeads[key].scraped_at = lead.scraped_at;
+    }
+    if (!groupedLeads[key].location && lead.location) groupedLeads[key].location = lead.location;
+    groupedLeads[key].leads.push(lead);
   });
 
   const batches = Object.values(groupedLeads).sort((a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime());
+
+  const deleteGroup = async (batch: any) => {
+    const label = batch.group_name || batch.search_query;
+    if (!confirm(`Delete the entire group "${label}" (${batch.leads.length} leads)? This cannot be undone.`)) return;
+    try {
+      const qs = batch.group_name
+        ? `group=${encodeURIComponent(batch.group_name)}`
+        : `batch=${encodeURIComponent(batch.batch_id)}`;
+      const res = await fetch(`/api/leads?${qs}`, { method: "DELETE" });
+      if (res.ok) {
+        const ids = new Set(batch.leads.map((l: Lead) => l.id));
+        setLeads(prev => prev.filter(l => !ids.has(l.id)));
+      }
+    } catch (e) {
+      console.error("Failed to delete group:", e);
+    }
+  };
+
+  const downloadGroup = (batch: any) => {
+    exportLeadsToExcel(batch.leads, {
+      groupName: batch.group_name || batch.search_query || 'Leads',
+      cityState: batch.location,
+      sheetName: batch.group_name || 'Leads',
+    });
+  };
 
   return (
     <div className="space-y-8 pb-12">
@@ -193,13 +235,22 @@ export default function CRMPage() {
           </p>
         </div>
         {leads.length > 0 && (
-          <button 
-            onClick={clearAllLeads}
-            className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-sm font-bold transition-all shadow-sm"
-          >
-            <Trash2 size={16} />
-            Nuke All Leads
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => exportLeadsToExcel(filteredLeads, { groupName: 'AllLeads', cityState: '', sheetName: 'All Leads' })}
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-xl text-sm font-bold transition-all shadow-sm"
+            >
+              <Download size={16} />
+              Export All ({filteredLeads.length})
+            </button>
+            <button
+              onClick={clearAllLeads}
+              className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 text-red-500 hover:bg-red-500/20 border border-red-500/20 rounded-xl text-sm font-bold transition-all shadow-sm"
+            >
+              <Trash2 size={16} />
+              Nuke All Leads
+            </button>
+          </div>
         )}
       </div>
 
@@ -265,13 +316,15 @@ export default function CRMPage() {
         <div className="space-y-6">
           <AnimatePresence>
             {batches.map((batch, batchIdx) => (
-              <BatchGroup 
-                key={batch.batch_id} 
-                batch={batch} 
-                batchIdx={batchIdx} 
-                updateStatus={updateStatus} 
-                deleteLead={deleteLead} 
-                updatingId={updatingId} 
+              <BatchGroup
+                key={batch.key}
+                batch={batch}
+                batchIdx={batchIdx}
+                updateStatus={updateStatus}
+                deleteLead={deleteLead}
+                updatingId={updatingId}
+                downloadGroup={downloadGroup}
+                deleteGroup={deleteGroup}
               />
             ))}
           </AnimatePresence>
@@ -281,8 +334,9 @@ export default function CRMPage() {
   );
 }
 
-function BatchGroup({ batch, batchIdx, updateStatus, deleteLead, updatingId }: any) {
+function BatchGroup({ batch, batchIdx, updateStatus, deleteLead, updatingId, downloadGroup, deleteGroup }: any) {
   const [isExpanded, setIsExpanded] = useState(batchIdx === 0); // Open first batch by default
+  const title = batch.group_name || batch.search_query;
 
   return (
     <motion.div
@@ -291,29 +345,47 @@ function BatchGroup({ batch, batchIdx, updateStatus, deleteLead, updatingId }: a
       transition={{ delay: Math.min(batchIdx * 0.1, 0.5) }}
       className="rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md overflow-hidden"
     >
-      <button 
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between p-5 md:p-6 bg-white/5 hover:bg-white/10 transition-colors text-left"
-      >
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-indigo-500/20 rounded-xl">
+      <div className="w-full flex items-center justify-between p-5 md:p-6 bg-white/5 hover:bg-white/10 transition-colors gap-4">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex items-center gap-4 text-left flex-1 min-w-0"
+        >
+          <div className="p-3 bg-indigo-500/20 rounded-xl shrink-0">
             <Briefcase className="h-5 w-5 text-indigo-400" />
           </div>
-          <div>
-            <h2 className="text-lg font-bold text-white uppercase tracking-wider">{batch.search_query}</h2>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-white uppercase tracking-wider truncate">{title}</h2>
             <p className="text-sm text-white/50 font-medium mt-1">
+              {batch.group_name && <span className="text-white/40 normal-case mr-1">{batch.search_query} • </span>}
               Scraped on {format(new Date(batch.scraped_at), "MMM d, yyyy 'at' h:mm a")} • {batch.leads.length} Leads
             </p>
           </div>
+        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => downloadGroup(batch)}
+            title="Download this group as Excel"
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-300 text-xs font-bold transition-colors"
+          >
+            <Download size={15} /> <span className="hidden md:inline">Excel</span>
+          </button>
+          <button
+            onClick={() => deleteGroup(batch)}
+            title="Delete this entire group"
+            className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 transition-colors"
+          >
+            <Trash2 size={15} />
+          </button>
+          <motion.button
+            onClick={() => setIsExpanded(!isExpanded)}
+            animate={{ rotate: isExpanded ? 90 : 0 }}
+            transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            className="p-2 bg-white/5 rounded-full"
+          >
+            <ChevronRight className="h-5 w-5 text-white/70" />
+          </motion.button>
         </div>
-        <motion.div
-          animate={{ rotate: isExpanded ? 90 : 0 }}
-          transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          className="p-2 bg-white/5 rounded-full"
-        >
-          <ChevronRight className="h-5 w-5 text-white/70" />
-        </motion.div>
-      </button>
+      </div>
 
       <AnimatePresence initial={false}>
         {isExpanded && (
@@ -358,8 +430,9 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
   const emails = parseJsonArray(lead.emails_found);
   const socials = parseJsonArray(lead.socials);
 
-  // Generate safe URLs for buttons
-  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.name + " " + (lead.address || ""))}`;
+  // Prefer the real Google Maps place URL captured at scrape time; else search.
+  const mapUrl = lead.google_maps_url
+    || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lead.name + " " + (lead.address || ""))}`;
   const mailToUrl = emails.length > 0 ? `mailto:${emails[0]}?subject=${encodeURIComponent(lead.suggested_subject || `Quick question about ${lead.name}`)}&body=${encodeURIComponent(lead.suggested_pitch || "")}` : "#";
   const telUrl = lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, '')}` : "#";
   const websiteUrl = lead.website ? (lead.website.startsWith('http') ? lead.website : `https://${lead.website}`) : "#";
@@ -371,6 +444,7 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
     reddit: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
     x: 'bg-white/10 text-white border-white/20',
     linkedin: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+    facebook: 'bg-blue-600/20 text-blue-300 border-blue-600/30',
     instagram: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
     hackernews: 'bg-orange-600/20 text-orange-500 border-orange-600/30',
     devto: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
@@ -380,6 +454,9 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
     upwork: 'bg-green-500/20 text-green-400 border-green-500/30',
     gmaps: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
     darkweb: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+    website: 'bg-teal-500/20 text-teal-300 border-teal-500/30',
+    indiamart: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+    justdial: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
   };
   const platformColor = platformColors[lead.platform || 'gmaps'] || 'bg-gray-500/20 text-gray-400 border-gray-500/30';
 
