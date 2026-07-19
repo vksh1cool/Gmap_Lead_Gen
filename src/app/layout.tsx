@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nexus Leads | Revenue Engine",
-  description: "AI-Powered GMaps Lead Generator and CRM",
+  title: "Nexus Leads",
+  description: "Find, score, and organise local-business leads from open data.",
 };
 
 export default function RootLayout({

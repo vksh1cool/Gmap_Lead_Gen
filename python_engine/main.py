@@ -19,6 +19,7 @@ from social_scraper import scrape_social_orchestrator
 from scrapers.serper_keys import key_manager
 from scrapers.website_mirror import scrape_website_mirror
 from scrapers.extract import extract_emails, extract_socials
+from scrapers.osm_places import search_places
 
 async def stealth_async(page):
     await Stealth().apply_stealth_async(page)
@@ -354,6 +355,23 @@ async def scrape_endpoint(niche: str, location: str, limit: int = 10):
         scrape_google_maps(niche, location, limit),
         media_type="application/x-ndjson"
     )
+
+async def stream_osm_places(niche: str, location: str, limit: int, enrich: bool = True):
+    """Free OpenStreetMap (Overpass) business-lead source. Streams NDJSON like /scrape."""
+    try:
+        async for event in search_places(niche, location, limit, enrich=enrich):
+            yield json.dumps(event) + "\n"
+    except Exception as e:
+        yield json.dumps({"type": "error", "message": f"OSM places lookup failed: {e}"}) + "\n"
+
+
+@app.get("/scrape-places")
+async def scrape_places_endpoint(niche: str, location: str, limit: int = 20, enrich: bool = True):
+    return StreamingResponse(
+        stream_osm_places(niche, location, limit, enrich),
+        media_type="application/x-ndjson",
+    )
+
 
 async def stream_social_leads(platform: str, keyword: str, limit: int, search_mode: str = "auto"):
     result = await scrape_social_orchestrator(platform, keyword, limit, search_mode)

@@ -1,5 +1,6 @@
 import { RawLead, ScoredLead } from './types';
 import { chatComplete, AiProvider } from './aiKeyPool';
+import { ICP_BRIEF } from './icp';
 
 // Preference hint carried from the UI/client into every LLM call. Keys come
 // from the server-side pool; these just bias which provider/model to try first,
@@ -310,8 +311,10 @@ export async function scoreLead(
   if (isJobListing) {
     // ── BRANCH 3: Job Listings (Upwork, etc.) — author is ALWAYS a buyer ──
     prompt = `
-You are an elite B2B Lead Qualifier for a digital agency specializing in web dev, SEO, and AI automation.
-You are analyzing a JOB LISTING. The author is ALWAYS a buyer — never a seller. Your job is to score based on project fit, budget signals, and scope clarity.
+${ICP_BRIEF}
+
+You are an elite B2B Lead Qualifier for LaunchPixel.
+You are analyzing a JOB LISTING. The author is ALWAYS a buyer — never a seller. Score based on fit with LaunchPixel's services, budget signals, and scope clarity.
 
 Job Title: ${lead.title || 'N/A'}
 Platform: ${lead.platform || 'upwork'}
@@ -320,24 +323,26 @@ Job Content:
 ${postContent}
 
 Scoring Rules:
-- "Diamond" (Score 8-10): Clear budget mentioned ($1k+), detailed scope, strong service fit (web dev, SEO, AI, automation, landing pages, e-commerce).
-- "Gold" (Score 5-7): Moderate fit — the project is related but vague on budget/scope, or is a small task.
-- "Junk" (Score 1-4): No service fit (e.g., data entry, accounting, legal). Tiny budget (<$100). Unrealistic expectations.
+- "Diamond" (Score 8-10): Clear budget ($1k+), detailed scope, strong fit with a LaunchPixel service (web build/redesign, e-commerce, branding, SEO, mobile app, AI automation).
+- "Gold" (Score 5-7): Moderate fit — related but vague on budget/scope, or a small task.
+- "Junk" (Score 1-4): No service fit (e.g. data entry, accounting, legal, content writing). Tiny budget (<$100). Unrealistic expectations.
 
+Also decide "service_fit": which ONE LaunchPixel service best matches — one of: web-development, ecommerce, branding, seo-marketing, mobile-app, ai-automation, none.
 Extract the core pain_point: What problem is the buyer trying to solve? (1 sentence)
 
 Pitch Guidelines:
 1. Write a 2-sentence proposal intro referencing their specific requirements.
-2. Mention a relevant case study or metric (e.g., "We recently built a similar e-commerce platform that increased conversions by 35%.").
+2. Mention a relevant LaunchPixel proof point (e.g., "We recently shipped a Shopify rebuild that lifted conversions 35%.").
 
 Output this exact JSON (no markdown, no explanation):
-{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "rationale": "<reason citing their requirements>", "pain_point": "<1-sentence problem they need solved>", "suggested_subject": "<proposal opener>", "suggested_pitch": "<your proposal intro>"}
+{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "service_fit": "<tag>", "rationale": "<reason citing their requirements>", "pain_point": "<1-sentence problem they need solved>", "suggested_subject": "<proposal opener>", "suggested_pitch": "<your proposal intro>"}
 `;
   } else if (isSocial) {
     // ── BRANCH 2: Social Posts — must determine BUYER vs SELLER ──
     prompt = `
-You are an elite B2B Lead Qualifier. Your goal is to ruthlessly filter out junk and identify TRUE BUYERS from social media posts.
-Your agency specializes in web dev, SEO, and AI automation.
+${ICP_BRIEF}
+
+You are an elite B2B Lead Qualifier for LaunchPixel. Your goal is to ruthlessly filter out junk and identify TRUE BUYERS from social media posts.
 
 CRITICAL CHAIN-OF-THOUGHT INSTRUCTION:
 Step 1: Read the post below.
@@ -372,20 +377,22 @@ Scoring Rules (PRECISION > RECALL — when in doubt, score LOW):
   - "Web development is changing so fast these days" → CHATTING, score 2
 
 Extract pain_point: What specific problem is the author facing? (1 sentence, or "none" if Junk)
+Also decide "service_fit": which ONE LaunchPixel service best solves it — one of: web-development, ecommerce, branding, seo-marketing, mobile-app, ai-automation, none.
 
 Pitch Guidelines:
-1. If Diamond/Gold: Write a highly personalized 2-sentence DM/reply that directly references their post content and offers a massive value-add.
+1. If Diamond/Gold: Write a highly personalized 2-sentence DM/reply that directly references their post content and offers a massive value-add tied to the matched LaunchPixel service.
 2. If Junk: Set suggested_pitch to empty string.
 
 Output this exact JSON (no markdown, no explanation):
-{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "rationale": "<BUYER or SELLER, then specific reason citing their text>", "pain_point": "<1-sentence problem or none>", "suggested_subject": "<short DM opener>", "suggested_pitch": "<your killer DM or empty>"}
+{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "service_fit": "<tag>", "rationale": "<BUYER or SELLER, then specific reason citing their text>", "pain_point": "<1-sentence problem or none>", "suggested_subject": "<short DM opener>", "suggested_pitch": "<your killer DM or empty>"}
 `;
   } else {
     // ── BRANCH 1: Google Maps Business ──
     prompt = `
-You are an elite B2B Lead Qualifier and Cold Email Copywriter for a high-end digital marketing agency.
-Your goal is to analyze this Google Maps business and generate an incredibly personalized, high-converting cold email pitch.
-Your agency specializes in cutting-edge growth: Web Dev, SEO, AEO (Answer Engine Optimization), GEO (Generative Engine Optimization), and LLMO (LLM Optimization).
+${ICP_BRIEF}
+
+You are an elite B2B Lead Qualifier and Cold Email Copywriter for LaunchPixel.
+Analyze this Google Maps business and generate an incredibly personalized, high-converting cold email pitch that maps their gap to a LaunchPixel service (web build/redesign, e-commerce, branding, SEO/performance marketing, AEO/GEO/LLMO for AI search, mobile app, or AI automation).
 
 Business Data:
 ${JSON.stringify(safeLeadData, null, 2)}
@@ -395,16 +402,18 @@ Scoring Rules:
 - "Gold" (Score 5-7): Has website but poor reviews/presence, or missing phone number.
 - "Junk" (Score 1-4): 4.5+ rating, 100+ reviews, strong online presence.
 
+Also decide "service_fit": the ONE LaunchPixel service to lead the pitch with — one of: web-development, ecommerce, branding, seo-marketing, mobile-app, ai-automation, none.
+
 Pitch Guidelines (CRITICAL):
 1. NO GENERIC FLUFF. Never say "I noticed areas for improvement."
 2. POKE THE PAIN POINT DIRECTLY AND PITCH THE FUTURE.
    - If 'is_claimed' is false: Warn them anyone could hijack their Maps listing today. Offer a free 2-min video on how to lock it down and optimize it for AI search engines (GEO/LLMO).
-   - If no website / uses social media as website: Warn them they are invisible to ChatGPT, Perplexity, and Google's AI Overviews. Offer to spin up an AEO-optimized site in 3 days.
+   - If no website / uses social media as website: Warn them they are invisible to ChatGPT, Perplexity, and Google's AI Overviews. Offer to spin up an AEO-optimized site fast.
    - If rating < 4.0 or few reviews: Tell them low trust means AI engines won't recommend them. Offer an automated 5-star review system.
 3. Keep it to 2-3 sentences max. Conversational, punchy, aggressive but professional.
 
 Output this exact JSON structure (no markdown, no explanation):
-{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "rationale": "<specific reason>", "suggested_subject": "<catchy, informal email subject>", "suggested_pitch": "<your killer cold email>"}
+{"lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "service_fit": "<tag>", "rationale": "<specific reason>", "suggested_subject": "<catchy, informal email subject>", "suggested_pitch": "<your killer cold email>"}
 `;
   }
 
@@ -429,6 +438,7 @@ Output this exact JSON structure (no markdown, no explanation):
       suggested_pitch: parsed.suggested_pitch ?? rules.pitch,
       suggested_subject: parsed.suggested_subject || rules.subject,
       ...(parsed.pain_point ? { pain_point: parsed.pain_point } : {}),
+      ...(parsed.service_fit ? { service_fit: String(parsed.service_fit) } : {}),
     };
   } catch (error: any) {
     console.error("[AI] JSON parse failed — falling back to rule-based:", error.message);

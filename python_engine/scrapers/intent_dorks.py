@@ -1,50 +1,40 @@
 """
 Expands a base keyword into multiple highly-targeted Google Dork queries
 aimed at finding buyer-intent posts.
+
+Intent suffixes are sourced from the LaunchPixel ICP (scrapers/icp.py) so the
+dorks hunt for signals that map to LaunchPixel's actual services — website
+builds/redesigns, e-commerce, branding, SEO, apps, AI automation — instead of
+generic "looking to hire" chatter.
 """
 from typing import List
 
+from scrapers.icp import intent_phrases_for
+
+# General fallback — kept broad and buyer-shaped for any platform not given a
+# tailored set by the ICP layer.
 GENERAL_INTENT_SUFFIXES = [
     '"DM me"',
     '"looking to hire"',
     '"need an agency"',
-    '"have a budget"',
     '"recommendations for"',
-    '"looking for a freelancer"',
-    '"can anyone recommend"'
-]
-
-UPWORK_INTENT_SUFFIXES = [
-    '"budget"',
-    '"looking for expert"',
-    '"need someone to"',
-    '"hiring"'
-]
-
-LINKEDIN_INTENT_SUFFIXES = [
-    '"hiring"',
-    '"looking for recommendations"',
     '"can anyone recommend"',
-    '"need help with"',
-    # Decision-maker targeting (idea borrowed from OpenOutreach's ICP approach):
-    # surface the person who can actually buy, not just any post.
-    '("founder" OR "CEO" OR "owner" OR "co-founder" OR "head of" OR "director")',
 ]
+
+# Hard cap so a single keyword doesn't fan out into dozens of search-backend
+# calls (which burns Serper credits / trips keyless rate-limits).
+MAX_DORKS_PER_KEYWORD = 8
+
 
 def expand_keyword_to_dorks(platform: str, site_domain: str, keyword: str) -> List[str]:
     """
     Given a platform name, site domain, and a base keyword, returns a list
     of full Google Dork queries aimed at high buyer-intent posts.
     """
-    platform_lower = platform.lower()
-    
-    if "upwork" in platform_lower:
-        suffixes = UPWORK_INTENT_SUFFIXES
-    elif "linkedin" in platform_lower:
-        suffixes = LINKEDIN_INTENT_SUFFIXES
-    else:
-        suffixes = GENERAL_INTENT_SUFFIXES
-        
+    # LaunchPixel-tuned, platform-aware intent phrases (falls back to general).
+    suffixes = intent_phrases_for(platform) or GENERAL_INTENT_SUFFIXES
+    suffixes = suffixes[: MAX_DORKS_PER_KEYWORD - 1]
+
     dorks = []
     # For long, complex sentences or questions, exact-phrase quotes 
     # will yield 0 results. If it's short, exact-phrase is better.

@@ -146,6 +146,12 @@ export default function Home() {
   const [niche, setNiche] = useState('');
   const [location, setLocation] = useState('');
 
+  // ── Local-business data source ──
+  // 'osm'    → OpenStreetMap (Overpass): free, no key, open data, zero ban risk.
+  // 'google' → Google Maps via headless browser: richer (rating/reviews/claim)
+  //            but slower and can trip Google's anti-bot. OSM is the safe default.
+  const [mapsSource, setMapsSource] = useState<'osm' | 'google'>('osm');
+
   // ── Lead group (for organizing + Excel export filename) ──
   const [groupName, setGroupName] = useState('');
 
@@ -351,6 +357,7 @@ export default function Home() {
           niche: option.niche || niche,
           location: option.location || location,
           keyword: option.keyword,
+          source: mapsSource,
           websiteUrl: option.websiteUrl,
           crawlDepth: option.crawlDepth,
           groupName,
@@ -609,6 +616,36 @@ export default function Home() {
                       >
                         <Navigation className="w-4 h-4" />
                       </button>
+                    </div>
+                  </div>
+
+                  {/* Data source — OpenStreetMap (free/open) vs Google Maps (browser) */}
+                  <div className="md:col-span-2 space-y-2">
+                    <label className="text-xs font-semibold text-emerald-300 uppercase tracking-wider flex items-center gap-2">
+                      <Target className="w-3 h-3" /> Data source
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {([
+                        { id: 'osm', title: 'OpenStreetMap', sub: 'Free · no API key · open data · no ban risk' },
+                        { id: 'google', title: 'Google Maps', sub: 'Richer (rating/reviews) · slower · browser-based' },
+                      ] as const).map(opt => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setMapsSource(opt.id)}
+                          className={`text-left rounded-xl border px-4 py-3 transition-all ${
+                            mapsSource === opt.id
+                              ? 'border-emerald-400/60 bg-emerald-500/10'
+                              : 'border-white/10 bg-black/40 hover:border-white/20'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 text-sm font-medium text-white">
+                            <span className={`h-2 w-2 rounded-full ${mapsSource === opt.id ? 'bg-emerald-400' : 'bg-gray-600'}`} />
+                            {opt.title}
+                          </div>
+                          <div className="text-[11px] text-gray-500 mt-0.5">{opt.sub}</div>
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </motion.div>

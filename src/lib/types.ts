@@ -32,5 +32,6 @@ export interface ScoredLead extends RawLead {
   suggested_pitch: string;
   suggested_subject?: string;
   pain_point?: string;
+  service_fit?: string; // LaunchPixel service tag: web-development | ecommerce | branding | seo-marketing | mobile-app | ai-automation | none
   status?: string; // 'Uncontacted' | 'Emailed' | 'Replied' | 'Closed'
 }

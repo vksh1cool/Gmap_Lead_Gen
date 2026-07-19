@@ -8,7 +8,7 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName } = body;
+    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName, source = 'osm' } = body;
 
     // Support comma-separated platforms (e.g. "reddit,x,linkedin") or single platform
     const activePlatform = platforms || platform;
@@ -32,7 +32,13 @@ export async function POST(req: NextRequest) {
       }
       const optimizedNiche = await optimizeSearchQuery(niche, 'Google Maps', aiPref);
       searchQuery = `${optimizedNiche} in ${location}`;
-      fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+      if (source === 'google') {
+        // Google Maps via headless browser — richer fields, but slower + ban-prone.
+        fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+      } else {
+        // Default: OpenStreetMap (Overpass) — free, keyless, open data, no ban risk.
+        fetchUrl = `http://127.0.0.1:8000/scrape-places?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+      }
     } else if (activePlatform === 'website') {
       // HTTrack website mirror. The seed URL rides in websiteUrl (preferred) or
       // falls back to keyword. No query optimization — it's a URL, not a search.
@@ -86,6 +92,107 @@ export async function POST(req: NextRequest) {
           const decoder = new TextDecoder();
           let buffer = '';
 
+          // ── Concurrent scoring pool ───────────────────────────────────────
+          // Leads used to be scored strictly one-at-a-time, so each AI call
+          // blocked the next lead from ever being emitted. We now fire scoring
+          // as leads arrive, capped at MAX_CONCURRENT_SCORING, and drain the
+          // pool before closing. Slowest path drops from sum(all calls) to
+          // roughly (total / concurrency). The frontend matches `scored` events
+          // by id, so out-of-order completion is safe.
+          const MAX_CONCURRENT_SCORING = 6;
+          const inflight = new Set<Promise<void>>();
+
+          const scoreAndEmit = async (rawLead: any) => {
+            try {
+              const scoredLead = await scoreLead(rawLead, aiPref);
+
+              // Preserve fields the scorer may not echo back, so the live
+              // export (and CSV/Excel) keeps the map link + grouping metadata.
+              (scoredLead as any).google_maps_url = rawLead.google_maps_url || rawLead.url || (scoredLead as any).google_maps_url || null;
+              (scoredLead as any).group_name = (groupName && String(groupName).trim()) || null;
+              (scoredLead as any).location = location || null;
+
+              try {
+                await query(
+                  `INSERT INTO gmaps_leads
+                    (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at, group_name, location, google_maps_url)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
+                   ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    address = EXCLUDED.address,
+                    phone = EXCLUDED.phone,
+                    website = EXCLUDED.website,
+                    rating = EXCLUDED.rating,
+                    reviews = EXCLUDED.reviews,
+                    emails_found = EXCLUDED.emails_found,
+                    socials = EXCLUDED.socials,
+                    about_snippet = EXCLUDED.about_snippet,
+                    is_claimed = EXCLUDED.is_claimed,
+                    lead_score = EXCLUDED.lead_score,
+                    lead_category = EXCLUDED.lead_category,
+                    rationale = EXCLUDED.rationale,
+                    suggested_pitch = EXCLUDED.suggested_pitch,
+                    suggested_subject = EXCLUDED.suggested_subject,
+                    platform = EXCLUDED.platform,
+                    kind = EXCLUDED.kind,
+                    author = EXCLUDED.author,
+                    author_url = EXCLUDED.author_url,
+                    post_url = EXCLUDED.post_url,
+                    post_content = EXCLUDED.post_content,
+                    title = EXCLUDED.title,
+                    matched_keyword = EXCLUDED.matched_keyword,
+                    pain_point = EXCLUDED.pain_point,
+                    posted_at = EXCLUDED.posted_at,
+                    group_name = EXCLUDED.group_name,
+                    location = EXCLUDED.location,
+                    google_maps_url = EXCLUDED.google_maps_url,
+                    scraped_at = CURRENT_TIMESTAMP`,
+                  [
+                    scoredLead.id,
+                    batchId,
+                    searchQuery,
+                    scoredLead.name,
+                    scoredLead.address || null,
+                    scoredLead.phone || null,
+                    scoredLead.website || null,
+                    scoredLead.rating || null,
+                    scoredLead.reviews || null,
+                    scoredLead.category || null,
+                    scoredLead.emails_found || [],
+                    scoredLead.socials || [],
+                    scoredLead.about_snippet || null,
+                    scoredLead.is_claimed ?? null,
+                    scoredLead.lead_score,
+                    scoredLead.lead_category || null,
+                    scoredLead.rationale || null,
+                    scoredLead.suggested_pitch || null,
+                    scoredLead.suggested_subject || null,
+                    scoredLead.platform || activePlatform || 'gmaps',
+                    scoredLead.external_id || null,
+                    scoredLead.kind || (activePlatform === 'gmaps' ? 'business_listing' : 'post'),
+                    scoredLead.author || null,
+                    scoredLead.author_url || null,
+                    scoredLead.post_url || null,
+                    scoredLead.post_content || null,
+                    scoredLead.title || null,
+                    scoredLead.matched_keyword || null,
+                    scoredLead.pain_point || null,
+                    scoredLead.posted_at || null,
+                    (groupName && String(groupName).trim()) || null,
+                    location || null,
+                    rawLead.google_maps_url || rawLead.url || null,
+                  ]
+                );
+              } catch (dbError: any) {
+                console.error("DB Insert Error:", dbError.message);
+              }
+
+              controller.enqueue(encoder.encode(JSON.stringify({ type: 'scored', data: scoredLead }) + '\n'));
+            } catch (scoreErr: any) {
+              console.error("Scoring error:", scoreErr?.message);
+            }
+          };
+
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -136,104 +243,24 @@ export async function POST(req: NextRequest) {
                   rawLead.id = rawLead.id || rawLead.name.replace(/\s+/g, '-').toLowerCase().substring(0, 50);
                 }
 
-                // Send raw lead
-                console.log("Sending raw lead to frontend:", rawLead.name);
+                // Emit the raw lead immediately, then score it in the
+                // background pool so a slow AI call never blocks the next
+                // lead's arrival. Backpressure: if the pool is full, wait for
+                // one slot before reading more.
                 controller.enqueue(encoder.encode(JSON.stringify({ type: 'raw', data: rawLead }) + '\n'));
-                
-                // AI Score
-                console.log("Scoring lead:", rawLead.name);
-                const scoredLead = await scoreLead(rawLead, aiPref);
-                console.log("Scored lead:", scoredLead.name);
 
-                // Preserve fields the scorer may not echo back, so the live
-                // export (and CSV/Excel) has the Maps link + grouping metadata.
-                (scoredLead as any).google_maps_url = rawLead.google_maps_url || rawLead.url || (scoredLead as any).google_maps_url || null;
-                (scoredLead as any).group_name = (groupName && String(groupName).trim()) || null;
-                (scoredLead as any).location = location || null;
-                
-                // Save to DB (UPSERT) — includes all new social lead columns
-                try {
-                  await query(
-                    `INSERT INTO gmaps_leads
-                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at, group_name, location, google_maps_url)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
-                     ON CONFLICT (id) DO UPDATE SET
-                      name = EXCLUDED.name,
-                      address = EXCLUDED.address,
-                      phone = EXCLUDED.phone,
-                      website = EXCLUDED.website,
-                      rating = EXCLUDED.rating,
-                      reviews = EXCLUDED.reviews,
-                      emails_found = EXCLUDED.emails_found,
-                      socials = EXCLUDED.socials,
-                      about_snippet = EXCLUDED.about_snippet,
-                      is_claimed = EXCLUDED.is_claimed,
-                      lead_score = EXCLUDED.lead_score,
-                      lead_category = EXCLUDED.lead_category,
-                      rationale = EXCLUDED.rationale,
-                      suggested_pitch = EXCLUDED.suggested_pitch,
-                      suggested_subject = EXCLUDED.suggested_subject,
-                      platform = EXCLUDED.platform,
-                      kind = EXCLUDED.kind,
-                      author = EXCLUDED.author,
-                      author_url = EXCLUDED.author_url,
-                      post_url = EXCLUDED.post_url,
-                      post_content = EXCLUDED.post_content,
-                      title = EXCLUDED.title,
-                      matched_keyword = EXCLUDED.matched_keyword,
-                      pain_point = EXCLUDED.pain_point,
-                      posted_at = EXCLUDED.posted_at,
-                      group_name = EXCLUDED.group_name,
-                      location = EXCLUDED.location,
-                      google_maps_url = EXCLUDED.google_maps_url,
-                      scraped_at = CURRENT_TIMESTAMP`,
-                    [
-                      scoredLead.id,
-                      batchId,
-                      searchQuery,
-                      scoredLead.name,
-                      scoredLead.address || null,
-                      scoredLead.phone || null,
-                      scoredLead.website || null,
-                      scoredLead.rating || null,
-                      scoredLead.reviews || null,
-                      scoredLead.category || null,
-                      scoredLead.emails_found || [],
-                      scoredLead.socials || [],
-                      scoredLead.about_snippet || null,
-                      scoredLead.is_claimed ?? null,
-                      scoredLead.lead_score,
-                      scoredLead.lead_category || null,
-                      scoredLead.rationale || null,
-                      scoredLead.suggested_pitch || null,
-                      scoredLead.suggested_subject || null,
-                      scoredLead.platform || activePlatform || 'gmaps',
-                      scoredLead.external_id || null,
-                      scoredLead.kind || (activePlatform === 'gmaps' ? 'business_listing' : 'post'),
-                      scoredLead.author || null,
-                      scoredLead.author_url || null,
-                      scoredLead.post_url || null,
-                      scoredLead.post_content || null,
-                      scoredLead.title || null,
-                      scoredLead.matched_keyword || null,
-                      scoredLead.pain_point || null,
-                      scoredLead.posted_at || null,
-                      (groupName && String(groupName).trim()) || null,
-                      location || null,
-                      rawLead.google_maps_url || rawLead.url || null,
-                    ]
-                  );
-                } catch (dbError: any) {
-                  console.error("DB Insert Error:", dbError.message);
+                const task = scoreAndEmit(rawLead).finally(() => inflight.delete(task));
+                inflight.add(task);
+                if (inflight.size >= MAX_CONCURRENT_SCORING) {
+                  await Promise.race(inflight);
                 }
-                
-                // Send scored lead
-                controller.enqueue(encoder.encode(JSON.stringify({ type: 'scored', data: scoredLead }) + '\n'));
               } catch (e) {
                  console.error("JSON parse error:", e);
               }
             }
           }
+          // Drain any still-scoring leads before signalling completion.
+          await Promise.all(inflight);
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'done' }) + '\n'));
         } catch (e: any) {
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', message: e.message }) + '\n'));
