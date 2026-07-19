@@ -24,11 +24,13 @@ import asyncio
 import os
 import re
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-from scrapers.extract import extract_emails, extract_socials
+from scrapers.extract import extract_emails, extract_socials, valid_phone
+from scrapers.search_backends import web_search, AllBackendsThrottled
 
 # ── Politeness / identity ──────────────────────────────────────────────────
 # Nominatim's usage policy REQUIRES a genuine, identifying User-Agent (ideally
@@ -234,11 +236,67 @@ def _element_to_lead(el: Dict) -> Optional[Dict]:
     }
 
 
-def _enrich_website(lead: Dict) -> Dict:
-    """Fetch the business's own homepage for emails/socials/about. Blocking."""
+# Hosts that are directories / aggregators / social pages — NOT a business's own
+# site. Used to reject bad "official website" candidates from web search.
+_DIRECTORY_HOSTS = (
+    "justdial.", "sulekha.", "indiamart.", "yelp.", "tripadvisor.", "zomato.",
+    "swiggy.", "practo.", "lybrate.", "glassdoor.", "mouthshut.", "yellowpages.",
+    "wikipedia.", "youtube.", "youtu.be", "google.", "goo.gl", "maps.app",
+    "amazon.", "flipkart.", "bing.", "quora.", "medium.", "blogspot.", "wordpress.com",
+    "apneareamein.", "asklaila.", "grotal.", "tradeindia.", "exportersindia.",
+    # Real-estate / classifieds / jobs aggregators — common false positives.
+    "magicbricks.", "99acres.", "housing.com", "nobroker.", "olx.", "quikr.",
+    "ambitionbox.", "naukri.", "commonfloor.", "makaan.", "squareyards.",
+    "dineout.", "eazydiner.", "nearbuy.", "bookmyshow.", "clustrmaps.",
+)
+# Social hosts — captured as socials, not treated as the "website".
+_SOCIAL_HOSTS = ("facebook.", "instagram.", "linkedin.", "twitter.", "x.com", "t.me", "wa.me")
+
+# Generic business-type / filler words that don't distinguish one business from
+# another — ignored when checking whether a search hit is really this business.
+_GENERIC_TOKENS = {
+    "the", "and", "for", "restaurant", "cafe", "coffee", "hotel", "resort",
+    "bar", "pub", "house", "clinic", "dental", "dentist", "gym", "fitness",
+    "salon", "spa", "beauty", "shop", "store", "mart", "center", "centre",
+    "ltd", "pvt", "private", "limited", "inc", "india", "best", "new", "hospital",
+    "medical", "care", "school", "college", "academy", "institute", "services",
+}
+
+
+def _name_tokens(name: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z0-9]+", (name or "").lower())
+            if len(t) >= 3 and t not in _GENERIC_TOKENS]
+
+
+def _looks_relevant(name: str, url: str, title: str) -> bool:
+    """
+    Guard against wrong matches: require a distinctive word from the business
+    name to appear in the result's domain or title. If the name is entirely
+    generic (nothing distinctive to match on), don't guess — reject.
+    """
+    toks = _name_tokens(name)
+    if not toks:
+        return False
+    host = urlparse(url).netloc.lower()
+    hay = f"{host} {(title or '').lower()}"
+    return any(t in hay for t in toks)
+
+
+def _phone_from_soup(soup: "BeautifulSoup") -> Optional[str]:
+    """Pull a phone from a `tel:` link — far more reliable than regex over text."""
+    for a in soup.select('a[href^="tel:"]'):
+        raw = a.get("href", "").replace("tel:", "").strip()
+        cleaned = valid_phone(raw)
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _crawl_into(lead: Dict) -> None:
+    """Fetch the lead's website and merge emails/socials/phone/about in place."""
     url = lead.get("website")
     if not url:
-        return lead
+        return
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     try:
@@ -247,8 +305,9 @@ def _enrich_website(lead: Dict) -> Dict:
             timeout=8, allow_redirects=True,
         )
         if resp.status_code >= 400 or not resp.text:
-            return lead
+            return
         html = resp.text[:400_000]  # cap huge pages
+
         emails = set(lead.get("emails_found") or [])
         for e in extract_emails(html):
             emails.add(e)
@@ -259,6 +318,11 @@ def _enrich_website(lead: Dict) -> Dict:
         lead["socials"] = list(socials)
 
         soup = BeautifulSoup(html, "lxml")
+        if not lead.get("phone"):
+            phone = _phone_from_soup(soup)
+            if phone:
+                lead["phone"] = phone
+
         meta = soup.find("meta", attrs={"name": "description"}) or soup.find(
             "meta", attrs={"property": "og:description"}
         )
@@ -270,11 +334,67 @@ def _enrich_website(lead: Dict) -> Dict:
             lead["about_snippet"] = " ".join(valid[:3])[:500]
     except Exception:
         pass
+
+
+def _discover_website(lead: Dict) -> None:
+    """
+    For a lead with no website, run ONE web search (Serper-first, with keyless
+    failover) to find the business's own site. Directory/aggregator results are
+    rejected; social pages are captured as socials instead. Best-effort — a miss
+    just leaves the lead as-is. Costs ~1 Serper credit per call.
+    """
+    if lead.get("website"):
+        return
+    name = lead.get("name", "").strip()
+    if not name:
+        return
+    # City from the tail of the address helps disambiguate common names.
+    city = ""
+    if lead.get("address"):
+        parts = [p.strip() for p in lead["address"].split(",") if p.strip()]
+        # skip a trailing PIN/zip
+        cand = [p for p in parts if not p.isdigit()]
+        if cand:
+            city = cand[-1]
+    query = f"{name} {city}".strip()
+    try:
+        results = web_search(query, limit=6)
+    except AllBackendsThrottled:
+        return
+    except Exception:
+        return
+
+    socials = set(lead.get("socials") or [])
+    for r in results:
+        url = (r.get("url") or "").strip()
+        if not url:
+            continue
+        host = urlparse(url).netloc.lower()
+        if any(s in host for s in _SOCIAL_HOSTS):
+            socials.add(url.rstrip(".,);"))
+            continue
+        if any(d in host for d in _DIRECTORY_HOSTS):
+            continue
+        if not _looks_relevant(name, url, r.get("title", "")):
+            continue
+        # First clean, relevant, non-directory, non-social result → the site.
+        lead["website"] = url
+        break
+    lead["socials"] = list(socials)
+
+
+def _enrich_lead(lead: Dict, deep: bool) -> Dict:
+    """Optionally discover a missing website via search, then crawl it. Blocking."""
+    if deep and not lead.get("website"):
+        _discover_website(lead)
+    if lead.get("website"):
+        _crawl_into(lead)
     return lead
 
 
 async def search_places(
     niche: str, location: str, limit: int = 20, enrich: bool = True,
+    deep: bool = False,
 ) -> AsyncGenerator[Dict, None]:
     """
     Async generator yielding info events and business-lead dicts (NDJSON-ready).
@@ -317,19 +437,27 @@ async def search_places(
         yield {"type": "info", "message": f"No “{niche}” businesses found in that area on OpenStreetMap. Try a broader niche or nearby city."}
         return
 
-    yield {"type": "info", "message": f"Found {len(leads)} businesses. {'Enriching contact info…' if enrich else 'Streaming…'}"}
-
     if not enrich:
+        yield {"type": "info", "message": f"Found {len(leads)} businesses. Streaming…"}
         for lead in leads:
             yield lead
         return
 
-    # Bounded-concurrency website enrichment; stream each as it finishes.
-    sem = asyncio.Semaphore(6)
+    # Deep mode fills missing websites via one web search each (Serper-first).
+    # Warn up-front how many lookups that will cost so credit spend is visible.
+    missing_sites = sum(1 for l in leads if not l.get("website"))
+    if deep and missing_sites:
+        yield {"type": "info", "message": f"Found {len(leads)} businesses. Deep contact search on {missing_sites} without a listed site (~{missing_sites} search credits)…"}
+    else:
+        yield {"type": "info", "message": f"Found {len(leads)} businesses. Enriching contact info…"}
+
+    # Bounded-concurrency enrichment; stream each as it finishes. Deep mode runs
+    # a touch narrower to stay under search-API per-second rate limits.
+    sem = asyncio.Semaphore(3 if deep else 6)
 
     async def _enrich(lead: Dict) -> Dict:
         async with sem:
-            return await asyncio.to_thread(_enrich_website, lead)
+            return await asyncio.to_thread(_enrich_lead, lead, deep)
 
     tasks = [asyncio.create_task(_enrich(l)) for l in leads]
     for coro in asyncio.as_completed(tasks):

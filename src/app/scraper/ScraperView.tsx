@@ -152,6 +152,11 @@ export default function Home() {
   //            but slower and can trip Google's anti-bot. OSM is the safe default.
   const [mapsSource, setMapsSource] = useState<'osm' | 'google'>('osm');
 
+  // Deep contact search: for OSM leads with no listed website, run one web
+  // search (Serper-first) to find their site and crawl it for email/phone.
+  // Off by default because it spends search credits.
+  const [deepEnrich, setDeepEnrich] = useState(false);
+
   // ── Lead group (for organizing + Excel export filename) ──
   const [groupName, setGroupName] = useState('');
 
@@ -358,6 +363,7 @@ export default function Home() {
           location: option.location || location,
           keyword: option.keyword,
           source: mapsSource,
+          deepEnrich,
           websiteUrl: option.websiteUrl,
           crawlDepth: option.crawlDepth,
           groupName,
@@ -647,6 +653,23 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
+
+                    {mapsSource === 'osm' && (
+                      <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/30 px-4 py-3 cursor-pointer hover:border-white/20 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={deepEnrich}
+                          onChange={(e) => setDeepEnrich(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 accent-emerald-500"
+                        />
+                        <span>
+                          <span className="text-sm font-medium text-white">Deep contact search</span>
+                          <span className="block text-[11px] text-gray-500 mt-0.5">
+                            For businesses with no listed website, run one web search each to find their site and pull email/phone. Uses ~1 Serper credit per missing site — slower, richer.
+                          </span>
+                        </span>
+                      </label>
+                    )}
                   </div>
                 </motion.div>
               )}

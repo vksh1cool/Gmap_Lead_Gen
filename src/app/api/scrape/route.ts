@@ -8,7 +8,7 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName, source = 'osm' } = body;
+    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName, source = 'osm', deepEnrich = false } = body;
 
     // Support comma-separated platforms (e.g. "reddit,x,linkedin") or single platform
     const activePlatform = platforms || platform;
@@ -37,7 +37,10 @@ export async function POST(req: NextRequest) {
         fetchUrl = `http://127.0.0.1:8000/scrape?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
       } else {
         // Default: OpenStreetMap (Overpass) — free, keyless, open data, no ban risk.
-        fetchUrl = `http://127.0.0.1:8000/scrape-places?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}`;
+        // deepEnrich fills missing contact info via one web search per site-less
+        // lead (Serper-first, keyless failover) — costs search credits.
+        const deep = deepEnrich ? '&deep=true' : '';
+        fetchUrl = `http://127.0.0.1:8000/scrape-places?niche=${encodeURIComponent(optimizedNiche)}&location=${encodeURIComponent(location)}&limit=${limit}${deep}`;
       }
     } else if (activePlatform === 'website') {
       // HTTrack website mirror. The seed URL rides in websiteUrl (preferred) or

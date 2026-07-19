@@ -356,19 +356,19 @@ async def scrape_endpoint(niche: str, location: str, limit: int = 10):
         media_type="application/x-ndjson"
     )
 
-async def stream_osm_places(niche: str, location: str, limit: int, enrich: bool = True):
+async def stream_osm_places(niche: str, location: str, limit: int, enrich: bool = True, deep: bool = False):
     """Free OpenStreetMap (Overpass) business-lead source. Streams NDJSON like /scrape."""
     try:
-        async for event in search_places(niche, location, limit, enrich=enrich):
+        async for event in search_places(niche, location, limit, enrich=enrich, deep=deep):
             yield json.dumps(event) + "\n"
     except Exception as e:
         yield json.dumps({"type": "error", "message": f"OSM places lookup failed: {e}"}) + "\n"
 
 
 @app.get("/scrape-places")
-async def scrape_places_endpoint(niche: str, location: str, limit: int = 20, enrich: bool = True):
+async def scrape_places_endpoint(niche: str, location: str, limit: int = 20, enrich: bool = True, deep: bool = False):
     return StreamingResponse(
-        stream_osm_places(niche, location, limit, enrich),
+        stream_osm_places(niche, location, limit, enrich, deep),
         media_type="application/x-ndjson",
     )
 
