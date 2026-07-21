@@ -439,7 +439,17 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
 
   const isSocialLead = lead.platform && lead.platform !== 'gmaps';
   const isJobLead = lead.kind === 'job' || lead.platform === 'upwork';
-  
+  // The real link to open in YOUR own logged-in session to reach out.
+  const openHref = lead.post_url || lead.author_url || (lead.website ? websiteUrl : '') || '';
+  const openLabelMap: Record<string, string> = {
+    linkedin: 'Open in LinkedIn', quora: 'Open on Quora', x: 'Open on X', twitter: 'Open on X',
+    reddit: 'Open on Reddit', instagram: 'Open on Instagram', facebook: 'Open on Facebook',
+    justdial: 'Open on Justdial', indiamart: 'Open on IndiaMART', upwork: 'Open on Upwork',
+    producthunt: 'Open on Product Hunt', hackernews: 'Open on Hacker News', devto: 'Open on DEV',
+    stackoverflow: 'Open on Stack Overflow',
+  };
+  const openLabel = isJobLead ? 'Open Job Post' : (openLabelMap[(lead.platform || '').toLowerCase()] || 'Open Original Post');
+
   const platformColors: Record<string, string> = {
     reddit: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
     x: 'bg-white/10 text-white border-white/20',
@@ -493,7 +503,13 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
           {isSocialLead && lead.author && (
             <div className="text-sm text-gray-400 flex items-center gap-1.5 mt-1">
               <User size={14} className="text-gray-500" />
-              <span className="font-medium text-gray-300">@{lead.author}</span>
+              {lead.author_url ? (
+                <a href={lead.author_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-medium text-gray-300 hover:text-indigo-300 underline decoration-dotted underline-offset-2 transition-colors">
+                  @{lead.author}
+                </a>
+              ) : (
+                <span className="font-medium text-gray-300">@{lead.author}</span>
+              )}
               {lead.posted_at && <span className="text-gray-600 px-1">• {new Date(lead.posted_at).toLocaleDateString()}</span>}
             </div>
           )}
@@ -527,9 +543,9 @@ function LeadCard({ lead, updateStatus, deleteLead, updatingId }: any) {
                 <MapPin size={14} className="text-red-400" /> GMaps
               </a>
             )}
-            {isSocialLead && lead.post_url && (
-              <a href={lead.post_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 rounded-lg text-xs font-semibold text-indigo-300 transition-colors shadow-sm">
-                <ExternalLink size={14} /> {isJobLead ? 'View Job' : 'View Post'}
+            {isSocialLead && openHref && (
+              <a href={openHref} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Opens in a new tab — sign in with your own account to reach out" className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-500/20 hover:bg-indigo-500/35 border border-indigo-500/40 rounded-lg text-xs font-semibold text-indigo-200 transition-colors shadow-sm">
+                <ExternalLink size={14} /> {openLabel}
               </a>
             )}
             {/* Show social links from the socials array too */}

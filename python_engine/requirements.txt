@@ -6,3 +6,4 @@ requests
 beautifulsoup4
 lxml
 python-dotenv
+curl_cffi

@@ -68,20 +68,34 @@ async def _scrape_one(platform: str, keyword: str, n: int, search_mode: str = "a
 
 
 def _rate_limit_notice(platform: str, exc: AllBackendsThrottled) -> Dict:
+    from scrapers.search_backends import serper_configured
     label = PLATFORM_LABELS.get(platform, platform.capitalize())
     cooldown = getattr(exc, "soonest_retry_s", 900)
     mins = max(1, round(cooldown / 60))
+    has_key = serper_configured()
+
+    if has_key:
+        # A key exists but every backend (keyed + keyless) is momentarily blocked —
+        # usually a transient burst. Don't tell them to add a key they already have.
+        message = (
+            f"{label}: all search backends are briefly rate-limited. "
+            f"Auto-retrying after ~{mins} min — other platforms keep running. "
+            f"Your Serper key may be out of credits; add another in Settings to stay unlimited."
+        )
+    else:
+        message = (
+            f"{label} hit keyless search rate-limits on every free engine (DuckDuckGo, Yahoo, Bing…). "
+            f"Cooling down ~{mins} min to protect your IP — other platforms keep running. "
+            f"Add a free SERPER_API_KEY in Settings for unlimited, ban-proof scraping."
+        )
     return {
         "type": "rate_limited",
         "platform": platform,
         "label": label,
         "cooldown_seconds": cooldown,
         "cooldown_minutes": mins,
-        "message": (
-            f"{label} hit a search engine rate-limit (e.g., DuckDuckGo limits aggressive scraping). "
-            f"Pausing it for ~{mins} min to protect your IP. Other platforms will keep running. "
-            f"Add a SERPER_API_KEY in settings for unlimited, ban-proof scraping."
-        ),
+        "has_serper_key": has_key,
+        "message": message,
     }
 
 

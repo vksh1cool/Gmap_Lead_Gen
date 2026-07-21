@@ -619,7 +619,7 @@ export default function SettingsPage() {
           <div className="mt-5 space-y-2">
             {serperKeys.length === 0 && (
               <div className="text-center py-6 text-sm text-white/30">
-                No Serper keys yet. Add one below — the dork platforms fall back to (rate-limited) keyless search without it.
+                No Serper keys yet. Dork platforms still work via the hardened keyless engine (rotated DuckDuckGo / Yahoo / Bing with browser impersonation). Add a free key here for higher volume + Google-quality results.
               </div>
             )}
             {serperKeys.map((k) => (

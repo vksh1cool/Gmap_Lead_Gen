@@ -114,7 +114,9 @@ function seedFromEnv() {
   envList('groq_api_key', 'GROQ_API_KEY', 'GROQ_API_KEYS').forEach(k => seeds.push({ provider: 'groq', key: k }));
   envList('nim_key', 'NIM_KEY', 'nim_api_key', 'NIM_API_KEY', 'NIM_API_KEYS', 'NVIDIA_API_KEY').forEach(k => seeds.push({ provider: 'nim', key: k }));
   envList('OPENAI_API_KEY', 'openai_api_key').forEach(k => seeds.push({ provider: 'openai', key: k }));
-  envList('GEMINI_API_KEY', 'gemini_api_key', 'GOOGLE_API_KEY').forEach(k => seeds.push({ provider: 'gemini', key: k }));
+  envList('GEMINI_API_KEY', 'gemini_api_key', 'gemini_api', 'GEMINI_API', 'gemini_key',
+          'GEMINI_KEY', 'GEMINI_API_KEYS', 'GOOGLE_API_KEY', 'google_api_key')
+    .forEach(k => seeds.push({ provider: 'gemini', key: k }));
 
   const existing = new Set(st.keys.map(k => k.id));
   let changed = false;
@@ -205,6 +207,14 @@ export function hasAnyKey(): boolean {
   return state().keys.some(isAvailable);
 }
 
+/** Distinct providers that currently have at least one usable key. Used to
+ *  decide whether a second "brain" exists to cross-check the first. */
+export function availableProviders(): AiProvider[] {
+  const seen = new Set<AiProvider>();
+  for (const k of state().keys) if (isAvailable(k)) seen.add(k.provider);
+  return [...seen];
+}
+
 function markExhausted(id: string, reason: string) {
   const st = state();
   const e = st.keys.find(k => k.id === id);
@@ -231,6 +241,64 @@ function classifyError(err: any): 'auth' | 'rate' | 'quota' | 'other' {
   if (status === 429 || msg.includes('rate limit') || msg.includes('too many requests')) return 'rate';
   if (msg.includes('quota') || msg.includes('insufficient') || msg.includes('exceeded') || msg.includes('credit')) return 'quota';
   return 'other';
+}
+
+/**
+ * Native Gemini call (generativelanguage.googleapis.com).
+ *
+ * Preferred over the OpenAI-compat shim: many Gemini keys (AI Studio, express,
+ * some Cloud projects) work on the native generateContent endpoint but return
+ * 403 on the /openai/ shim. Converts OpenAI-style messages → Gemini `contents`
+ * and throws errors carrying `.status` so classifyError() drives failover.
+ */
+async function geminiNativeComplete(
+  key: string,
+  model: string,
+  messages: { role: string; content: string }[],
+  temperature: number,
+  maxTokens: number,
+): Promise<string> {
+  const systemParts = messages.filter(m => m.role === 'system').map(m => ({ text: m.content }));
+  const contents = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+
+  const body: any = {
+    contents,
+    generationConfig: {
+      temperature,
+      maxOutputTokens: maxTokens,
+      // Gemini 2.5 Flash is a "thinking" model — disable thinking so the whole
+      // token budget goes to the actual JSON answer (no truncated scores).
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  };
+  if (systemParts.length) body.systemInstruction = { parts: systemParts };
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
+    },
+  );
+
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.error?.message || ''; } catch { /* ignore */ }
+    const e: any = new Error(`Gemini ${res.status}: ${detail || res.statusText}`);
+    e.status = res.status;
+    throw e;
+  }
+
+  const data: any = await res.json();
+  if (data?.promptFeedback?.blockReason) {
+    throw new Error(`Gemini blocked: ${data.promptFeedback.blockReason}`);
+  }
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  return parts.map((p: any) => p?.text || '').join('').trim();
 }
 
 // ── Public: the rotating chat call ───────────────────────────────────────────
@@ -303,18 +371,27 @@ export async function chatComplete(
   let lastErr: any = null;
   for (const c of candidates) {
     try {
-      const clientOpts: any = { apiKey: c.key, maxRetries: 0, timeout: 30000 };
-      const baseURL = baseUrlFor(c.provider);
-      if (baseURL) clientOpts.baseURL = baseURL;
-      const client = new OpenAI(clientOpts);
+      let text: string;
+      if (c.provider === 'gemini') {
+        // Native Gemini endpoint (broader key compatibility than the /openai/ shim).
+        text = await geminiNativeComplete(
+          c.key, c.model, messages as any,
+          opts.temperature ?? 0.2, opts.maxTokens ?? 300,
+        );
+      } else {
+        const clientOpts: any = { apiKey: c.key, maxRetries: 0, timeout: 30000 };
+        const baseURL = baseUrlFor(c.provider);
+        if (baseURL) clientOpts.baseURL = baseURL;
+        const client = new OpenAI(clientOpts);
 
-      const resp = await client.chat.completions.create({
-        model: c.model,
-        messages,
-        temperature: opts.temperature ?? 0.2,
-        max_tokens: opts.maxTokens ?? 300,
-      });
-      const text = resp.choices[0]?.message?.content?.trim() || '';
+        const resp = await client.chat.completions.create({
+          model: c.model,
+          messages,
+          temperature: opts.temperature ?? 0.2,
+          max_tokens: opts.maxTokens ?? 300,
+        });
+        text = resp.choices[0]?.message?.content?.trim() || '';
+      }
       if (c.id) markOk(c.id);
       if (ck && text) cacheSet(ck, text);
       return { text, provider: c.provider, model: c.model };
@@ -346,6 +423,11 @@ export async function validateKey(
   if (!key) return { ok: false, reason: 'empty key' };
   if (!PROVIDERS.includes(provider)) return { ok: false, reason: 'unknown provider' };
   try {
+    if (provider === 'gemini') {
+      await geminiNativeComplete(key, model || DEFAULT_MODELS[provider],
+        [{ role: 'user', content: 'ping' }], 0, 1);
+      return { ok: true };
+    }
     const clientOpts: any = { apiKey: key, maxRetries: 0, timeout: 15000 };
     const baseURL = baseUrlFor(provider);
     if (baseURL) clientOpts.baseURL = baseURL;

@@ -12,6 +12,11 @@ export interface RawLead {
   is_claimed?: boolean;
   socials?: string[];
   about_snippet?: string;
+  // Deep Google Maps fields
+  coordinates?: string;   // "lat,lng"
+  hours?: string;         // live status line, e.g. "Open ⋅ Closes 6 PM"
+  price_level?: string;   // "$$", "₹₹", price range
+  google_maps_url?: string;
   // Social / multi-platform fields
   platform?: string;      // 'gmaps' | 'reddit' | 'x' | 'linkedin' | 'hackernews' | 'devto' | 'stackoverflow' | 'instagram' | 'producthunt' | 'quora' | 'upwork'
   kind?: string;          // 'business_listing' | 'post' | 'comment' | 'job'

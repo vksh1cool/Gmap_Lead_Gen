@@ -91,6 +91,29 @@ function getPlatformBadge(platformId: string) {
   return { emoji: p.emoji, label: p.label, colorClass: `${p.color}` };
 }
 
+// Label for the "open the real lead" button, so you know exactly where it takes
+// you before you click through to contact them in your own logged-in session.
+function getOpenLabel(platform?: string, isJob?: boolean): string {
+  if (isJob) return 'Open Job Post';
+  const map: Record<string, string> = {
+    linkedin: 'Open in LinkedIn',
+    quora: 'Open on Quora',
+    x: 'Open on X',
+    twitter: 'Open on X',
+    reddit: 'Open on Reddit',
+    instagram: 'Open on Instagram',
+    facebook: 'Open on Facebook',
+    justdial: 'Open on Justdial',
+    indiamart: 'Open on IndiaMART',
+    upwork: 'Open on Upwork',
+    producthunt: 'Open on Product Hunt',
+    hackernews: 'Open on Hacker News',
+    devto: 'Open on DEV',
+    stackoverflow: 'Open on Stack Overflow',
+  };
+  return map[(platform || '').toLowerCase()] || 'Open Original Post';
+}
+
 function useElapsedTimer(isRunning: boolean) {
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef<number | null>(null);
@@ -344,7 +367,7 @@ export default function Home() {
     setCurrentLeadName('');
 
     try {
-      const requests = selectedOptionIndices.map(idx => {
+      const runOne = async (idx: number) => {
         const option = generatedOptions[idx];
         const payload = {
           platform: option.platform,
@@ -359,14 +382,31 @@ export default function Home() {
           aiProvider,
           aiModel,
         };
-        return fetch('/api/scrape', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }).then(res => readStream(res));
-      });
+        try {
+          const res = await fetch('/api/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          await readStream(res);
+        } catch (err) {
+          // Isolate failures: one platform erroring must never abort the others.
+          console.error(`Scrape failed for ${option.platform}:`, err);
+        }
+      };
 
-      await Promise.all(requests);
+      // Cap concurrency (pool of 3) so we never burst-hammer search engines —
+      // gentler on both the Serper QPS limit and the keyless engine rotation.
+      const queue = [...selectedOptionIndices];
+      const POOL = 3;
+      const workers = Array.from({ length: Math.min(POOL, queue.length) }, async () => {
+        while (queue.length) {
+          const idx = queue.shift();
+          if (idx === undefined) break;
+          await runOne(idx);
+        }
+      });
+      await Promise.all(workers);
       setStage('complete');
       setProgress('Scraping complete!');
       setIsScraping(false);
@@ -981,6 +1021,9 @@ export default function Home() {
                     const isWebsiteLead = lead.platform === 'website';
                     const isSocialLead = !!lead.platform && lead.platform !== 'gmaps' && !isWebsiteLead;
                     const isJobLead = lead.kind === 'job' || lead.platform === 'upwork';
+                    // The real link to open in YOUR own logged-in session to reach out.
+                    const openHref = lead.post_url || lead.author_url || lead.website || (lead as any).google_maps_url || (lead as any).url || '';
+                    const openLabel = getOpenLabel(lead.platform, isJobLead);
 
                     return (
                       <motion.div
@@ -1036,7 +1079,13 @@ export default function Home() {
                                   {lead.author && (
                                     <p className="text-sm text-gray-400 flex items-center gap-1.5">
                                       <User className="w-3.5 h-3.5 text-gray-500" />
-                                      <span className="font-medium text-gray-300">@{lead.author}</span>
+                                      {lead.author_url ? (
+                                        <a href={lead.author_url} target="_blank" rel="noreferrer" className="font-medium text-gray-300 hover:text-indigo-300 underline decoration-dotted underline-offset-2 transition-colors">
+                                          @{lead.author}
+                                        </a>
+                                      ) : (
+                                        <span className="font-medium text-gray-300">@{lead.author}</span>
+                                      )}
                                     </p>
                                   )}
                                   {lead.post_content && (
@@ -1084,16 +1133,27 @@ export default function Home() {
                                 <ExternalLink className="w-3.5 h-3.5" /> Website
                               </a>
                             )}
-                            {isSocialLead && lead.post_url && (
+                            {isSocialLead && openHref && (
                               <a
                                 id={`view-post-${lead.id}`}
-                                href={lead.post_url}
+                                href={openHref}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="flex items-center gap-1.5 bg-indigo-500/15 hover:bg-indigo-500/25 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-indigo-300 font-semibold text-xs transition-all hover:shadow-lg hover:shadow-indigo-500/10"
+                                title="Opens in a new tab — sign in with your own account to reach out"
+                                className="flex items-center gap-1.5 bg-indigo-500/20 hover:bg-indigo-500/35 px-3.5 py-1.5 rounded-lg border border-indigo-500/40 text-indigo-200 font-semibold text-xs transition-all hover:shadow-lg hover:shadow-indigo-500/20"
                               >
                                 <ExternalLink className="w-3.5 h-3.5" />
-                                {isJobLead ? 'View Job' : 'View Original Post'}
+                                {openLabel}
+                              </a>
+                            )}
+                            {!isSocialLead && !isWebsiteLead && (lead as any).google_maps_url && (
+                              <a
+                                href={(lead as any).google_maps_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-300 font-semibold text-xs transition-all"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" /> View on Google Maps
                               </a>
                             )}
                             {isWebsiteLead && lead.reviews && lead.reviews !== 'N/A' && (

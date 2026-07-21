@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from social_scraper import scrape_social_orchestrator
 from scrapers.serper_keys import key_manager
 from scrapers.website_mirror import scrape_website_mirror
-from scrapers.extract import extract_emails, extract_socials
+from scrapers.extract import extract_emails, extract_socials, valid_email
 
 async def stealth_async(page):
     await Stealth().apply_stealth_async(page)
@@ -104,31 +104,75 @@ class AntiBanEngine:
         if self.consecutive_blocks >= self.max_blocks:
             self.is_circuit_open = True
 
+_CONTACT_HINTS = ("contact", "about", "reach", "connect", "get-in-touch",
+                  "getintouch", "team", "support", "enquir", "hire")
+
+
 async def crawl_website(url: str, context: BrowserContext, engine: AntiBanEngine):
-    """Visits a website to extract emails, socials, and about text."""
-    if not url: return [], [], ""
-    emails, socials, about_snippet = set(), set(), ""
-    page = await context.new_page()
-    await stealth_async(page)
-    try:
-        await engine.human_delay(500, 1500)
-        await page.goto(url, timeout=10000, wait_until="domcontentloaded")
-        content = await page.content()
-        # Emails + socials via the shared, well-filtered extractors
-        # (de-obfuscation + junk blocklist — same logic the HTTrack mirror uses).
-        for e in extract_emails(content):
-            emails.add(e)
-        for s in extract_socials(content):
-            socials.add(s)
-        # About snippet (grab first 3 paragraphs)
-        paragraphs = await page.locator('p').all_text_contents()
-        valid_p = [p.strip() for p in paragraphs if len(p.strip()) > 30]
-        about_snippet = " ".join(valid_p[:3])[:500]
-    except Exception:
-        pass
-    finally:
-        await page.close()
-    
+    """Visit a website and harvest emails/socials/about text.
+
+    Depth upgrade (gosom google-maps-scraper lesson): most businesses hide their
+    email on /contact or /about, not the homepage — so we crawl the homepage,
+    then follow up to two contact/about pages, stopping as soon as we get an email.
+    mailto: links are read directly (highest-signal address on the page).
+    """
+    if not url:
+        return [], [], ""
+    emails, socials = set(), set()
+    about_snippet = ""
+    visited = set()
+
+    async def harvest(page_url: str):
+        nonlocal about_snippet
+        if not page_url or page_url in visited or len(visited) >= 3:
+            return []
+        visited.add(page_url)
+        page = await context.new_page()
+        await stealth_async(page)
+        try:
+            await engine.human_delay(400, 1200)
+            await page.goto(page_url, timeout=10000, wait_until="domcontentloaded")
+            content = await page.content()
+            for e in extract_emails(content):
+                emails.add(e)
+            for s in extract_socials(content):
+                socials.add(s)
+            # mailto: links — the cleanest email signal on any page.
+            try:
+                hrefs = await page.eval_on_selector_all(
+                    'a[href^="mailto:"]', "els => els.map(e => e.getAttribute('href'))")
+                for h in hrefs or []:
+                    addr = (h or "").replace("mailto:", "").split("?")[0].strip()
+                    if addr and valid_email(addr):
+                        emails.add(addr)
+            except Exception:
+                pass
+            if not about_snippet:
+                paragraphs = await page.locator('p').all_text_contents()
+                valid_p = [p.strip() for p in paragraphs if len(p.strip()) > 30]
+                about_snippet = " ".join(valid_p[:3])[:500]
+            # Return same-site links so the caller can pick contact/about pages.
+            try:
+                return await page.eval_on_selector_all('a[href]', "els => els.map(e => e.href)")
+            except Exception:
+                return []
+        except Exception:
+            return []
+        finally:
+            await page.close()
+
+    links = await harvest(url) or []
+    if not emails:  # only spend extra page-loads if the homepage gave us nothing
+        base = url.rstrip("/")
+        candidates = [l for l in links
+                      if l and l.startswith("http") and any(h in l.lower() for h in _CONTACT_HINTS)]
+        if not candidates:
+            candidates = [f"{base}/contact", f"{base}/contact-us", f"{base}/about"]
+        for c in candidates[:2]:
+            if emails:
+                break
+            await harvest(c)
+
     return list(emails), list(socials), about_snippet
 
 async def process_business_url(href: str, context: BrowserContext, engine: AntiBanEngine):
@@ -209,6 +253,48 @@ async def process_business_url(href: str, context: BrowserContext, engine: AntiB
                 is_claimed = False
         except Exception: pass
 
+        # ── Deep fields (gosom google-maps-scraper lesson) — all best-effort ──
+        category = ""
+        try:
+            cat_el = page.locator('button[jsaction*="category"]').first
+            if await cat_el.count() > 0:
+                category = (await cat_el.text_content() or "").strip()
+        except Exception: pass
+
+        # GPS coordinates are embedded in the canonical map URL (/@lat,lng,zoom).
+        coordinates = ""
+        try:
+            m = re.search(r"/@(-?\d+\.\d+),(-?\d+\.\d+)", page.url)
+            if m:
+                coordinates = f"{m.group(1)},{m.group(2)}"
+        except Exception: pass
+
+        hours = ""
+        try:
+            # The live status line reads like "Open ⋅ Closes 6 PM" / "Closed ⋅ Opens 8 AM".
+            for sel in ('[jsaction*="openhours"]', 'button[data-item-id*="oh"]',
+                        'span:has-text("Closes")', 'span:has-text("Opens")'):
+                el = page.locator(sel).first
+                if await el.count() > 0:
+                    txt = (await el.text_content() or "").strip()
+                    if txt and txt.lower() not in ("hours", "suggest an edit"):
+                        hours = " ".join(txt.split())[:120]
+                        break
+                    lbl = (await el.get_attribute("aria-label") or "").strip()
+                    if lbl and "hour" not in lbl.lower():
+                        hours = lbl[:120]
+                        break
+        except Exception: pass
+
+        price_level = ""
+        try:
+            price_el = page.locator('[aria-label*="Price"], [aria-label*="Price range"]').first
+            if await price_el.count() > 0:
+                pl = (await price_el.get_attribute("aria-label") or "").strip()
+                pm = re.search(r"(\$+|₹+|€+|£+|\d[\d,]*\s*[–-]\s*\d[\d,]*)", pl)
+                price_level = pm.group(1) if pm else pl[:40]
+        except Exception: pass
+
         # Deep crawl if website exists
         emails, socials, about_snippet = [], [], ""
         if website:
@@ -224,6 +310,10 @@ async def process_business_url(href: str, context: BrowserContext, engine: AntiB
             "url": href,
             "google_maps_url": href,
             "is_claimed": is_claimed,
+            "category": category,
+            "coordinates": coordinates,
+            "hours": hours,
+            "price_level": price_level,
             "emails_found": emails,
             "socials": socials,
             "about_snippet": about_snippet

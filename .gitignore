@@ -45,3 +45,6 @@ ai_keys.json.tmp
 # Runtime DB config (contains secrets) + AI cache
 db_config.json
 ai_cache.json
+
+# TypeScript build cache
+tsconfig.tsbuildinfo

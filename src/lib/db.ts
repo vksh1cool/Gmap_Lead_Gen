@@ -181,6 +181,9 @@ export async function initDB() {
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS group_name TEXT;
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS location TEXT;
     ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS google_maps_url TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS coordinates TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS hours TEXT;
+    ALTER TABLE gmaps_leads ADD COLUMN IF NOT EXISTS price_level TEXT;
   `;
   try {
     await p.query(createTableQuery);

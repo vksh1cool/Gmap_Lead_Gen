@@ -155,8 +155,8 @@ export async function POST(req: NextRequest) {
                 try {
                   await query(
                     `INSERT INTO gmaps_leads
-                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at, group_name, location, google_maps_url)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
+                      (id, batch_id, search_query, name, address, phone, website, rating, reviews, category, emails_found, socials, about_snippet, is_claimed, lead_score, lead_category, rationale, suggested_pitch, suggested_subject, platform, external_id, kind, author, author_url, post_url, post_content, title, matched_keyword, pain_point, posted_at, group_name, location, google_maps_url, coordinates, hours, price_level)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
                      ON CONFLICT (id) DO UPDATE SET
                       name = EXCLUDED.name,
                       address = EXCLUDED.address,
@@ -186,6 +186,9 @@ export async function POST(req: NextRequest) {
                       group_name = EXCLUDED.group_name,
                       location = EXCLUDED.location,
                       google_maps_url = EXCLUDED.google_maps_url,
+                      coordinates = EXCLUDED.coordinates,
+                      hours = EXCLUDED.hours,
+                      price_level = EXCLUDED.price_level,
                       scraped_at = CURRENT_TIMESTAMP`,
                     [
                       scoredLead.id,
@@ -221,6 +224,9 @@ export async function POST(req: NextRequest) {
                       (groupName && String(groupName).trim()) || null,
                       location || null,
                       rawLead.google_maps_url || rawLead.url || null,
+                      rawLead.coordinates || null,
+                      rawLead.hours || null,
+                      rawLead.price_level || null,
                     ]
                   );
                 } catch (dbError: any) {

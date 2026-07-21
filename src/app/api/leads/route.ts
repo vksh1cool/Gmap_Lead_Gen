@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
       rationale, suggested_pitch, suggested_subject, status, scraped_at,
       platform, kind, author, author_url, post_url, post_content, title,
       matched_keyword, pain_point, posted_at, external_id, batch_id, search_query,
-      group_name, location, google_maps_url
+      group_name, location, google_maps_url, coordinates, hours, price_level
       FROM gmaps_leads`;
     const params: string[] = [];
 

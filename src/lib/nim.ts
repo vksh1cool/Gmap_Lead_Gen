@@ -1,5 +1,5 @@
 import { RawLead, ScoredLead } from './types';
-import { chatComplete, AiProvider } from './aiKeyPool';
+import { chatComplete, availableProviders, AiProvider } from './aiKeyPool';
 
 // Preference hint carried from the UI/client into every LLM call. Keys come
 // from the server-side pool; these just bias which provider/model to try first,
@@ -415,13 +415,14 @@ Output this exact JSON structure (no markdown, no explanation):
   // No key available or every key failed → rule-based baseline.
   if (!res) return ruleFallback();
 
+  let scored: ScoredLead;
   try {
     // Robust JSON extraction: find the first { and last }.
     const jsonMatch = res.text.match(/\{[\s\S]*\}/);
     const jsonString = jsonMatch ? jsonMatch[0] : '{}';
     const parsed = JSON.parse(jsonString);
 
-    return {
+    scored = {
       ...lead,
       lead_score: typeof parsed.lead_score === 'number' ? parsed.lead_score : rules.score,
       lead_category: parsed.lead_category || rules.category,
@@ -433,6 +434,69 @@ Output this exact JSON structure (no markdown, no explanation):
   } catch (error: any) {
     console.error("[AI] JSON parse failed — falling back to rule-based:", error.message);
     return ruleFallback();
+  }
+
+  // Cross-provider verification: a SECOND brain (a different provider) checks the
+  // first on promising leads, so Groq/NIM/Gemini correct each other for accuracy.
+  return crossCheckScore(lead, scored, res.provider, pref);
+}
+
+/**
+ * Second-opinion pass. A different provider re-grades a promising lead and can
+ * correct the score/category; results are reconciled (conservative on downgrade).
+ * Skipped when disabled, for weak leads, or when only one provider is available.
+ */
+async function crossCheckScore(
+  lead: RawLead,
+  primary: ScoredLead,
+  primaryProvider: AiProvider | undefined,
+  pref: AiPref,
+): Promise<ScoredLead> {
+  if (process.env.AI_CONSENSUS === '0') return primary;
+  // Double-check everything except obvious junk. Catches under-scored good leads
+  // (false negatives) as well as over-scored ones. Floor is tunable.
+  const minScore = parseInt(process.env.AI_CONSENSUS_MIN || '4', 10);
+  if ((primary.lead_score ?? 0) < minScore) return primary;
+  const providers = availableProviders();
+  if (providers.length < 2) return primary;                   // need a genuine second brain
+  const other = providers.find(p => p !== primaryProvider);
+
+  const content = (lead.post_content || lead.about_snippet || lead.title || lead.name || '').slice(0, 500);
+  const verifyPrompt = `You are a strict QA reviewer auditing another AI's lead score for accuracy.
+
+LEAD: ${lead.name}${lead.platform ? ` [${lead.platform}]` : ''}
+CONTENT: ${content}
+WEBSITE: ${lead.website || 'none'} | EMAIL: ${(lead.emails_found || [])[0] || 'none'}
+
+ANOTHER AI SCORED IT: ${primary.lead_score}/10 (${primary.lead_category}) — "${primary.rationale}"
+
+Is that accurate? A real buyer-intent / high-fit lead deserves 7-10; a weak or off-topic one deserves 1-4. Reply with ONLY this JSON:
+{"agree": true|false, "lead_score": <1-10>, "lead_category": "Diamond"|"Gold"|"Junk", "correction": "<≤12 words, only if you disagree>"}`;
+
+  const vr = await chatComplete(
+    [{ role: 'user', content: verifyPrompt }],
+    { temperature: 0, maxTokens: 160, ...toChatOpts(pref), preferProvider: other },
+  );
+  if (!vr) return primary;
+
+  try {
+    const p = JSON.parse((vr.text.match(/\{[\s\S]*\}/) || ['{}'])[0]);
+    const secondScore = typeof p.lead_score === 'number' ? p.lead_score : primary.lead_score;
+    if (p.agree === false && Math.abs(secondScore - (primary.lead_score ?? 0)) >= 1) {
+      // Reconcile: average the two brains; on a downgrade keep the lower category.
+      const merged = Math.max(1, Math.min(10, Math.round(((primary.lead_score ?? 0) + secondScore) / 2)));
+      const downgraded = secondScore < (primary.lead_score ?? 0);
+      return {
+        ...primary,
+        lead_score: merged,
+        lead_category: downgraded ? (p.lead_category || primary.lead_category) : primary.lead_category,
+        rationale: `${primary.rationale} · ${primaryProvider}↔${vr.provider} cross-check${p.correction ? `: ${p.correction}` : ''}`,
+      };
+    }
+    // Agreement → mark it as verified so the user knows two brains concur.
+    return { ...primary, rationale: `${primary.rationale} · verified by ${vr.provider}` };
+  } catch {
+    return primary;
   }
 }
 
@@ -470,26 +534,39 @@ export async function analyzeIntent(
   if (location) constraintsStr += `CRITICAL CONSTRAINT: The user explicitly wants this Target Location: "${location}". Ensure your gmaps options use this exact location.\n`;
 
   const prompt = `
-You are an elite B2B Lead Generation Strategist. A user has provided a "dump" of their intent — explaining what kind of leads they want in natural language.
-Your goal is to parse this intent and generate a JSON array of specific, actionable scraping options across different platforms.
+You are an elite B2B Lead-Generation Strategist. A user pasted a natural-language "dump" of the leads they want. Convert it into a JSON array of sharp, ready-to-run scraping options, ordered highest-intent first.
 
 User Intent: "${intent}"
 
 ${platformsStr}
 ${constraintsStr}
 
-Rules for generating options:
-1. Generate between 2 and 6 distinct options based on what the user asked for.
-2. If the user mentions a physical location or local business type (e.g., "plumbers in texas", "roofing"), ALWAYS include a "gmaps" option.
-   - For "gmaps", you MUST provide "niche" and "location".
-3. If the user mentions people complaining, asking for recommendations, or looking for help, include Social/Q&A platforms like "reddit", "x", "quora".
-   - For social/Q&A, you MUST provide "keyword" (a short, targeted search phrase).
-4. Each option MUST include a "label" which is a short, human-readable description (e.g., "Google Maps: Roofers in Austin, TX", "Reddit: Roof leak complaints").
+HOW EACH PLATFORM FINDS LEADS (choose the right tool for the intent):
+- "gmaps": local/physical businesses by category + place. Needs "niche" + "location". Best when the user wants businesses to SELL TO (e.g. dentists, restaurants, plumbers).
+- "linkedin": companies & decision-makers (founders/CEOs/owners). Good for B2B service buyers.
+- "reddit" / "x" / "quora": people publicly ASKING for help, recommendations, or venting a pain point. Best for buyer-intent posts/questions.
+- "justdial" / "indiamart": Indian B2B directory listings of local businesses/suppliers.
+- "upwork": job listings where the author is ALWAYS a buyer.
+- "hackernews" / "devto" / "stackoverflow" / "producthunt": technical/startup audiences.
 
-Output format MUST be exactly this JSON array (do NOT wrap in markdown \`\`\`json blocks, just the raw JSON):
+KEYWORD RULES (this is what makes or breaks lead quality):
+1. Keep "keyword" SHORT (2-5 words) — it becomes a search dork, so buyer-intent phrasing is added automatically downstream. Do NOT stuff it with quotes or operators.
+2. Use the core niche/service + the buyer's angle, not filler. Bad: "people who might want marketing". Good: "digital marketing agency".
+3. For gmaps, "niche" is the business category and "location" is the city/region — both concise.
+4. Prefer the SERVICE the user sells as the anchor (e.g. if they sell websites, target businesses that need websites).
+
+OUTPUT RULES:
+1. Generate 3-6 distinct, non-overlapping options. Spread across platforms when the intent supports it; don't duplicate the same query on one platform.
+2. If a physical/local business type or place is mentioned, ALWAYS include a "gmaps" option.
+3. Respect every CRITICAL CONSTRAINT above exactly. If platforms were restricted, use ONLY those.
+4. Every option needs a "label" (short human description). gmaps needs "niche"+"location"; all others need "keyword".
+5. Order the array by expected lead quality (strongest buyer-intent first).
+
+Output MUST be raw JSON only (no markdown fences, no commentary):
 [
   { "platform": "gmaps", "label": "Google Maps: Roofing companies in Texas", "niche": "roofing companies", "location": "Texas" },
-  { "platform": "reddit", "label": "Reddit: Roof leak complaints", "keyword": "roof leak complaints" }
+  { "platform": "reddit", "label": "Reddit: businesses needing a roofer", "keyword": "roof leak recommendation" },
+  { "platform": "linkedin", "label": "LinkedIn: roofing business owners", "keyword": "roofing company owner" }
 ]
 `;
 
@@ -500,12 +577,48 @@ Output format MUST be exactly this JSON array (do NOT wrap in markdown \`\`\`jso
   if (!res) {
     throw new Error('No working AI key available. Add a Groq or NIM key in Settings → AI Key Pool (or .env.local).');
   }
+  let raw: any[];
   try {
     const jsonMatch = res.text.match(/\[[\s\S]*\]/);
-    const jsonString = jsonMatch ? jsonMatch[0] : '[]';
-    return JSON.parse(jsonString) as IntentOption[];
+    raw = JSON.parse(jsonMatch ? jsonMatch[0] : '[]');
+    if (!Array.isArray(raw)) throw new Error('not an array');
   } catch (error: any) {
     console.error("[Intent Analyzer] JSON parse failed:", error.message);
     throw new Error('AI returned an unparseable response. Try again.');
   }
+
+  // Validate + normalise so we never hand the scraper a malformed option.
+  const allowed = new Set([...allLocation, ...allSocial, ...allQa]);
+  const constrained = platforms && platforms.length > 0;
+  const seen = new Set<string>();
+  const options: IntentOption[] = [];
+
+  for (const o of raw) {
+    if (!o || typeof o !== 'object') continue;
+    const platform = String(o.platform || '').toLowerCase().trim();
+    if (!allowed.has(platform)) continue;                 // unknown platform → drop
+    if (constrained && !platforms.includes(platform)) continue; // honour the constraint
+
+    if (platform === 'gmaps') {
+      const n = (o.niche || niche || '').toString().trim();
+      const l = (o.location || location || '').toString().trim();
+      if (!n || !l) continue;                             // gmaps needs both
+      const key = `gmaps|${n}|${l}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({ platform, label: (o.label || `Google Maps: ${n} in ${l}`).toString(), niche: n, location: l });
+    } else {
+      const kw = (o.keyword || '').toString().trim();
+      if (!kw) continue;                                  // social/Q&A needs a keyword
+      const key = `${platform}|${kw}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({ platform, label: (o.label || `${platform}: ${kw}`).toString(), keyword: kw });
+    }
+  }
+
+  if (options.length === 0) {
+    throw new Error('No valid scraping options could be built from that intent. Try describing the niche and location more concretely.');
+  }
+  return options;
 }
