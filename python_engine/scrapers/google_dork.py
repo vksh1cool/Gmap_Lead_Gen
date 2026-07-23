@@ -11,11 +11,12 @@ import asyncio
 import hashlib
 import re
 from datetime import datetime, timezone
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 
 from .search_backends import web_search, AllBackendsThrottled  # noqa: F401 (re-exported)
 from .intent_dorks import expand_keyword_to_dorks
+from .dateparse import parse_date, within_freshness, freshness_label, recency_key
 
 logger = logging.getLogger(__name__)
 
@@ -117,18 +118,24 @@ def _derive_name(title: str, url: str, site_domain: str) -> str:
     return t or _name_from_slug(url) or "Unknown"
 
 
-def _dork_sync(platform_name: str, site_domain: str, keyword: str, limit: int, search_mode: str = "auto") -> List[Dict]:
+def _dork_sync(platform_name: str, site_domain: str, keyword: str, limit: int,
+               search_mode: str = "auto", freshness: Optional[str] = None) -> List[Dict]:
     dorks = expand_keyword_to_dorks(platform_name, site_domain, keyword)
 
     leads: List[Dict] = []
     seen: set = set()
-    
+    # When a freshness window is set we may drop stale hits, so cast a wider net
+    # per query to still fill `limit` with fresh ones.
+    fetch_n = limit * 3 if freshness else limit
+
     for query in dorks:
         if len(leads) >= limit:
             break
-            
-        results = web_search(query, limit, search_mode)  # may raise AllBackendsThrottled
-        
+
+        # Freshness rides into the search layer → Serper asks Google for recent
+        # results only (qdr:h/d/w…), so we surface hours-old posts, not archives.
+        results = web_search(query, fetch_n, search_mode, freshness)  # may raise AllBackendsThrottled
+
         for r in results:
             if len(leads) >= limit:
                 break
@@ -147,11 +154,19 @@ def _dork_sync(platform_name: str, site_domain: str, keyword: str, limit: int, s
             if _is_junk_lead(site_domain, href, title):
                 logger.debug("Filtered junk lead: %s (%s)", title[:40], href)
                 continue
+
+            # Real recency from the engine's own date field ("2 hours ago" /
+            # "Mar 3, 2026"), NOT the scrape time. This is the freshness signal.
+            posted_iso, age_hours = parse_date(r.get("date", ""))
+            # Hard-drop stale leads when a window is requested and we KNOW the age.
+            # Undated leads survive (we rank them below dated ones, never discard).
+            if freshness and not within_freshness(age_hours, freshness):
+                continue
+
             seen.add(canon)
             snippet = (r.get("snippet") or "").strip()
-    
             clean_name = _derive_name(title, href, site_domain)
-            now = datetime.now(timezone.utc).isoformat()
+            scraped_now = datetime.now(timezone.utc).isoformat()
             leads.append({
                 # Stable id from the URL — never Python's per-process-randomized hash().
                 "external_id": f"{platform_name}_{hashlib.sha1(href.encode()).hexdigest()[:16]}",
@@ -170,21 +185,27 @@ def _dork_sync(platform_name: str, site_domain: str, keyword: str, limit: int, s
                 "rating": "N/A",
                 "reviews": "N/A",
                 "matched_keyword": keyword,
-                "created_at": now,
-                "posted_at": now,
+                "created_at": posted_iso or scraped_now,
+                "posted_at": posted_iso or "",   # empty = unknown age (not "now")
+                "age_hours": age_hours,
+                "freshness_label": freshness_label(age_hours),
             })
 
+    # Freshest first — hours-old comments float to the top of the pile.
+    leads.sort(key=recency_key)
     if not leads:
-        logger.info("Dork for %s ('%s') found 0 results", platform_name, keyword)
+        logger.info("Dork for %s ('%s', freshness=%s) found 0 results",
+                    platform_name, keyword, freshness or "any")
     return leads
 
 
-async def scrape_google_dork(platform_name: str, site_domain: str, keyword: str, limit: int = 10, search_mode: str = "auto") -> List[Dict]:
+async def scrape_google_dork(platform_name: str, site_domain: str, keyword: str, limit: int = 10,
+                             search_mode: str = "auto", freshness: Optional[str] = None) -> List[Dict]:
     """Async wrapper — runs the blocking HTTP+parse off the event loop.
 
     Propagates AllBackendsThrottled to the caller so a cooldown dialog can fire.
     """
-    leads = await asyncio.to_thread(_dork_sync, platform_name, site_domain, keyword, limit, search_mode)
+    leads = await asyncio.to_thread(_dork_sync, platform_name, site_domain, keyword, limit, search_mode, freshness)
     
     if leads:
         try:

@@ -69,8 +69,16 @@ def _parse_hits(hits: list, keyword: str, kind: str) -> List[Dict]:
     return leads
 
 
-async def scrape_hackernews(keyword: str, limit: int = 30) -> List[Dict]:
-    """Main entry point called by the orchestrator."""
+# Freshness code → lookback window in seconds for HN's created_at_i filter.
+_HN_WINDOW = {"h": 3600, "d": 86400, "w": 7 * 86400, "m": 30 * 86400, "y": 365 * 86400}
+
+
+async def scrape_hackernews(keyword: str, limit: int = 30, freshness=None) -> List[Dict]:
+    """Main entry point called by the orchestrator.
+
+    `freshness` narrows the `search_by_date` window so a 'past hour' request
+    only pulls comments/stories from the last 3600s (default: last 7 days).
+    """
     if not rate_limiter.can_scrape("hackernews"):
         logger.info("HackerNews rate-limited or circuit-broken, skipping")
         return []
@@ -79,7 +87,8 @@ async def scrape_hackernews(keyword: str, limit: int = 30) -> List[Dict]:
 
     all_leads: List[Dict] = []
     seen_ids: set = set()
-    seven_days_ago = int(time.time()) - 7 * 86400
+    window = _HN_WINDOW.get(freshness or "", 7 * 86400)
+    seven_days_ago = int(time.time()) - window
     encoded = quote(keyword)
     cap = min(limit, 50)
 

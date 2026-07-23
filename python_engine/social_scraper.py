@@ -41,8 +41,13 @@ PLATFORM_LABELS = {
 }
 
 
-async def _scrape_one(platform: str, keyword: str, n: int, search_mode: str = "auto") -> List[Dict]:
+async def _scrape_one(platform: str, keyword: str, n: int, search_mode: str = "auto",
+                      freshness=None) -> List[Dict]:
     """Run a single platform scraper and return its raw leads.
+
+    `freshness` ('h'/'d'/'w'/'m'/'y' or None) is threaded to every scraper that
+    can honour it natively (Reddit `t`, HN window, Serper qdr: for dorks). The
+    rest are still recency-sorted downstream.
 
     May raise AllBackendsThrottled when the scrape-tier search layer is fully
     rate-limited — the orchestrator turns that into a user-facing cooldown notice.
@@ -50,9 +55,9 @@ async def _scrape_one(platform: str, keyword: str, n: int, search_mode: str = "a
     if platform in ("x", "twitter"):
         return await scrape_x(keyword, max_leads=n)
     if platform == "reddit":
-        return await scrape_reddit(keyword, limit=n)
+        return await scrape_reddit(keyword, limit=n, freshness=freshness)
     if platform == "hackernews":
-        return await scrape_hackernews(keyword, limit=n)
+        return await scrape_hackernews(keyword, limit=n, freshness=freshness)
     if platform == "devto":
         return await scrape_devto(keyword, limit=n)
     if platform == "stackoverflow":
@@ -62,7 +67,8 @@ async def _scrape_one(platform: str, keyword: str, n: int, search_mode: str = "a
     if platform == "darkweb":
         return await scrape_darkweb(keyword, limit=n)
     if platform in DORK_SITES:
-        return await scrape_google_dork(platform, DORK_SITES[platform], keyword, limit=n, search_mode=search_mode)
+        return await scrape_google_dork(platform, DORK_SITES[platform], keyword,
+                                        limit=n, search_mode=search_mode, freshness=freshness)
     logger.warning("Unknown platform requested: %s", platform)
     return []
 
@@ -99,14 +105,19 @@ def _rate_limit_notice(platform: str, exc: AllBackendsThrottled) -> Dict:
     }
 
 
-async def scrape_social_orchestrator(platform: str, keyword: str, max_leads: int = 10, search_mode: str = "auto") -> Dict:
+async def scrape_social_orchestrator(platform: str, keyword: str, max_leads: int = 10,
+                                     search_mode: str = "auto", freshness=None) -> Dict:
     """
     Routes to the correct platform scraper(s) and returns
     {"leads": [...], "notices": [rate_limited events]}.
 
     `platform` may be a single id, a comma-separated list (e.g.
     "linkedin,instagram,quora" from the multi-select UI), or "all".
+    `freshness` narrows results to a recency window and re-ranks them newest-first.
     """
+    from scrapers.dateparse import normalize_freshness, parse_date, within_freshness, freshness_label, recency_key
+    freshness = normalize_freshness(freshness)
+
     # Parse into a clean, de-duplicated platform list.
     requested = [p.strip() for p in (platform or "").lower().split(",") if p.strip()]
     if "all" in requested:
@@ -120,7 +131,7 @@ async def scrape_social_orchestrator(platform: str, keyword: str, max_leads: int
             logger.warning("No platform specified")
         elif len(requested) == 1:
             try:
-                leads = await _scrape_one(requested[0], keyword, max_leads, search_mode)
+                leads = await _scrape_one(requested[0], keyword, max_leads, search_mode, freshness)
             except AllBackendsThrottled as exc:
                 notices.append(_rate_limit_notice(requested[0], exc))
         else:
@@ -131,16 +142,30 @@ async def scrape_social_orchestrator(platform: str, keyword: str, max_leads: int
                 if i > 0:
                     await asyncio.sleep(2.5)  # Pace the requests to avoid DDG 202 limits
                 try:
-                    res = await _scrape_one(p, keyword, per, search_mode)
+                    res = await _scrape_one(p, keyword, per, search_mode, freshness)
                     if isinstance(res, list):
                         leads.extend(res)
                 except AllBackendsThrottled as exc:
                     notices.append(_rate_limit_notice(p, exc))
                 except Exception as exc:
                     logger.error("Platform %s failed: %s", p, exc)
-            leads = leads[:max_leads]
     except Exception as e:
         logger.error("Error orchestrating scrape for %s: %s", platform, e)
+
+    # ── Freshness pass: stamp age on every lead, drop the stale, rank the fresh ──
+    # Native scrapers (Reddit/HN/Dev.to) give an ISO posted_at; dork leads already
+    # carry age_hours. Here we unify: parse any missing age, apply the window as a
+    # final safety net, and sort so hours-old comments land at the very top.
+    for ld in leads:
+        if ld.get("age_hours") is None:
+            _iso, age = parse_date(ld.get("posted_at") or ld.get("created_at"))
+            ld["age_hours"] = age
+            if age is not None and not ld.get("freshness_label"):
+                ld["freshness_label"] = freshness_label(age)
+    if freshness:
+        leads = [ld for ld in leads if within_freshness(ld.get("age_hours"), freshness)]
+    leads.sort(key=recency_key)
+    leads = leads[:max_leads]
 
     # Standardize the output format for the frontend
     standardized_leads = []

@@ -103,6 +103,8 @@ function getOpenLabel(platform?: string, isJob?: boolean): string {
     reddit: 'Open on Reddit',
     instagram: 'Open on Instagram',
     facebook: 'Open on Facebook',
+    website: 'Open Website',
+    darkweb: 'Open Source Page',
     justdial: 'Open on Justdial',
     indiamart: 'Open on IndiaMART',
     upwork: 'Open on Upwork',
@@ -146,6 +148,17 @@ function formatTime(seconds: number): string {
   return `${m}:${s}`;
 }
 
+function CooldownTimer({ until }: { until: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const remaining = Math.max(0, Math.ceil((until - now) / 1000));
+  if (remaining <= 0) return <span className="text-emerald-400">ready to retry</span>;
+  return <span className="font-mono tabular-nums">resumes in {formatTime(remaining)}</span>;
+}
+
 export default function Home() {
   // ── Smart Intent State ──
   const [intentDump, setIntentDump] = useState('');
@@ -153,6 +166,21 @@ export default function Home() {
   const [generatedOptions, setGeneratedOptions] = useState<any[]>([]);
   const [selectedOptionIndices, setSelectedOptionIndices] = useState<number[]>([]);
   const [limit, setLimit] = useState<number>(10);
+
+  // ── Freshness: how recent a lead must be. 'd' (past 24h) catches buyer
+  // comments while they're still unanswered. The enhancer can override per-option.
+  const [freshness, setFreshness] = useState<string>('d');
+
+  // ── Offer: what the user sells. Makes the AI scorer + query enhancer rank
+  // buyers of THIS (websites, video editing, consulting, anything). Persisted.
+  const [offer, setOffer] = useState<string>('');
+  useEffect(() => {
+    try { setOffer(localStorage.getItem('lead_offer') || ''); } catch { /* ssr */ }
+  }, []);
+  const saveOffer = (v: string) => {
+    setOffer(v);
+    try { localStorage.setItem('lead_offer', v); } catch { /* ignore */ }
+  };
 
   // ── Multi-platform state ──
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>(PLATFORMS.map(p => p.id));
@@ -179,6 +207,11 @@ export default function Home() {
   const [isScraping, setIsScraping] = useState(false);
   const [leads, setLeads] = useState<ScoredLead[]>([]);
   const [progress, setProgress] = useState<string>('');
+  const [uiError, setUiError] = useState('');
+  const abortRef = useRef<AbortController | null>(null);
+  // Tally per-run outcomes so completion can be honest: "complete" only if
+  // something actually worked, "error" if every option failed with 0 leads.
+  const runStatsRef = useRef({ leads: 0, errors: 0, lastError: '' });
   
   const [apiKey, setApiKey] = useState('');
   const [aiProvider, setAiProvider] = useState('nim');
@@ -264,7 +297,10 @@ export default function Home() {
 
           if (parsed.type === 'info') {
             setProgress(parsed.message);
+          } else if (parsed.type === 'warning') {
+            setProgress(`⚠ ${parsed.message}`);
           } else if (parsed.type === 'raw') {
+            runStatsRef.current.leads++;
             setProgress(`Found ${parsed.data.name}, analyzing with AI...`);
             setCurrentLeadName(parsed.data.name);
             setLeads((prev) => {
@@ -291,6 +327,8 @@ export default function Home() {
             }));
             setProgress(`${parsed.label || parsed.platform} rate-limited — paused ~${parsed.cooldown_minutes || 15} min`);
           } else if (parsed.type === 'error') {
+            runStatsRef.current.errors++;
+            runStatsRef.current.lastError = parsed.message || 'Unknown error';
             setProgress(`Error: ${parsed.message}`);
           }
         } catch (err) {
@@ -332,7 +370,7 @@ export default function Home() {
         const res = await fetch('/api/analyze-intent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ intent: intentDump, platforms: selectedPlatforms, niche, location, apiKey, aiProvider, aiModel }),
+          body: JSON.stringify({ intent: intentDump, platforms: selectedPlatforms, niche, location, apiKey, aiProvider, aiModel, offer }),
         });
         const data = await res.json();
         if (data.error) throw new Error(data.error);
@@ -344,7 +382,7 @@ export default function Home() {
       setSelectedOptionIndices(combined.map((_: any, i: number) => i));
     } catch (err: any) {
       console.error(err);
-      alert('Failed to analyze intent: ' + err.message);
+      setUiError(`Failed to analyze intent: ${err.message}`);
     } finally {
       setIsAnalyzingIntent(false);
     }
@@ -356,15 +394,24 @@ export default function Home() {
     );
   };
 
+  const stopScrape = () => {
+    abortRef.current?.abort();
+    setProgress('Stopping…');
+  };
+
   const handleScrape = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedOptionIndices.length === 0) return;
 
     setIsScraping(true);
     setLeads([]);
+    setUiError('');
     setProgress('Initializing engine...');
     setStage('connecting');
     setCurrentLeadName('');
+    runStatsRef.current = { leads: 0, errors: 0, lastError: '' };
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const runOne = async (idx: number) => {
@@ -381,16 +428,31 @@ export default function Home() {
           apiKey,
           aiProvider,
           aiModel,
+          // Per-option freshness from the enhancer wins; else the global selector.
+          freshness: option.freshness || freshness,
+          offer,
         };
         try {
           const res = await fetch('/api/scrape', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+            signal: controller.signal,
           });
+          if (!res.ok) {
+            let msg = `Request failed (HTTP ${res.status})`;
+            try {
+              const j = await res.json();
+              if (j?.error) msg = j.error;
+            } catch { /* non-JSON error body */ }
+            throw new Error(msg);
+          }
           await readStream(res);
-        } catch (err) {
+        } catch (err: any) {
+          if (err?.name === 'AbortError') return;
           // Isolate failures: one platform erroring must never abort the others.
+          runStatsRef.current.errors++;
+          runStatsRef.current.lastError = err?.message || String(err);
           console.error(`Scrape failed for ${option.platform}:`, err);
         }
       };
@@ -400,15 +462,26 @@ export default function Home() {
       const queue = [...selectedOptionIndices];
       const POOL = 3;
       const workers = Array.from({ length: Math.min(POOL, queue.length) }, async () => {
-        while (queue.length) {
+        while (queue.length && !controller.signal.aborted) {
           const idx = queue.shift();
           if (idx === undefined) break;
           await runOne(idx);
         }
       });
       await Promise.all(workers);
-      setStage('complete');
-      setProgress('Scraping complete!');
+
+      const { leads: leadCount, errors, lastError } = runStatsRef.current;
+      if (controller.signal.aborted) {
+        setStage('complete');
+        setProgress(`Stopped — ${leadCount} lead${leadCount === 1 ? '' : 's'} captured`);
+      } else if (leadCount === 0 && errors > 0) {
+        setStage('error');
+        setProgress(`Failed: ${lastError}`);
+        setUiError(lastError);
+      } else {
+        setStage('complete');
+        setProgress('Scraping complete!');
+      }
       setIsScraping(false);
       setCurrentLeadName('');
     } catch (error: any) {
@@ -429,12 +502,13 @@ export default function Home() {
         sheetName: groupName || 'Leads',
       });
       setProgress(`Exported ${leads.length} leads → ${filename}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Failed to export Excel');
+      setUiError(`Failed to export Excel: ${err?.message || err}`);
     }
   };
 
+  const canGenerate = !!intentDump.trim() || (selectedPlatforms.includes('website') && !!websiteUrls.trim());
   const currentStageIdx = getStageIndex(stage);
   // Progress percent calculation is rough since we have multiple options
   const totalLimit = limit * selectedOptionIndices.length;
@@ -470,7 +544,7 @@ export default function Home() {
                       <span className="flex items-center gap-2 text-sm font-medium text-amber-300">
                         <Clock className="h-4 w-4" /> {rl.label}
                       </span>
-                      <span className="text-xs text-gray-500">~{rl.cooldown_minutes} min cooldown</span>
+                      <span className="text-xs text-gray-500"><CooldownTimer until={rl.until} /></span>
                     </div>
                     <p className="text-xs leading-relaxed text-gray-400">{rl.message}</p>
                     <button onClick={() => dismissRateLimit(rl.platform)}
@@ -524,6 +598,30 @@ export default function Home() {
             )}
           </AnimatePresence>
         </motion.header>
+
+        {/* Inline error banner (replaces blocking alert()s) */}
+        <AnimatePresence>
+          {uiError && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="flex items-start justify-between gap-4 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-sm"
+              role="alert"
+            >
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="w-5 h-5 shrink-0 text-red-400" />
+                <span className="break-words">{uiError}</span>
+              </div>
+              <button
+                onClick={() => setUiError('')}
+                className="text-red-300/70 hover:text-red-200 transition-colors text-xs font-semibold uppercase tracking-wider shrink-0"
+              >
+                Dismiss
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Form Container */}
         <motion.section
@@ -699,13 +797,63 @@ export default function Home() {
               )}
             </AnimatePresence>
 
+            {/* ── Offer + Freshness: the two dials that make leads convert ── */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-fuchsia-300 uppercase tracking-wider flex items-center gap-2">
+                  <Zap className="w-3 h-3" /> What I sell (my offer)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. web design, SEO, AI automation — or video editing, consulting…"
+                  value={offer}
+                  onChange={(e) => saveOffer(e.target.value)}
+                  className="w-full bg-black/40 border border-fuchsia-500/30 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-fuchsia-500 focus:border-fuchsia-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
+                />
+                <p className="text-[11px] text-gray-600 leading-tight">
+                  Ranks buyers of <span className="text-fuchsia-400">this</span> across every niche. Blank = web/SEO/AI default.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-orange-300 uppercase tracking-wider flex items-center gap-2">
+                  <Clock className="w-3 h-3" /> Freshness (catch it before competitors)
+                </label>
+                <div className="flex gap-1.5 flex-wrap">
+                  {[
+                    { code: 'h', label: 'Past hour' },
+                    { code: 'd', label: '24 hours' },
+                    { code: 'w', label: 'Week' },
+                    { code: 'm', label: 'Month' },
+                    { code: 'any', label: 'Any' },
+                  ].map(f => (
+                    <button
+                      key={f.code}
+                      type="button"
+                      onClick={() => setFreshness(f.code)}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border transition-all ${
+                        freshness === f.code
+                          ? 'bg-orange-500/20 border-orange-400 text-orange-300'
+                          : 'bg-black/40 border-white/10 text-gray-500 hover:border-white/20'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-600 leading-tight">
+                  Social asks age fast — <span className="text-orange-400">24h</span> keeps them warm. The ✨ enhancer can override per option.
+                </p>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={handleAnalyzeIntent}
-              disabled={isAnalyzingIntent || (!intentDump.trim() && !(selectedPlatforms.includes('website') && websiteUrls.trim()))}
+              disabled={isAnalyzingIntent || !canGenerate}
               className={`
                 px-6 py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white
-                ${isAnalyzingIntent || !intentDump.trim()
+                ${isAnalyzingIntent || !canGenerate
                   ? 'bg-indigo-600/50 cursor-not-allowed opacity-70'
                   : 'bg-indigo-600 hover:bg-indigo-500 hover:shadow-lg hover:shadow-indigo-500/25 active:scale-95'
                 }
@@ -747,11 +895,17 @@ export default function Home() {
                           {isSelected ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5" />}
                         </div>
                         <div className="space-y-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-semibold">{opt.label}</span>
                             <span className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-full border ${badge.colorClass}`}>
                               {badge.emoji} {badge.label}
                             </span>
+                            {opt.freshness && opt.freshness !== 'any' && (
+                              <span className="px-2 py-0.5 text-[10px] font-bold rounded-full border border-orange-400/40 bg-orange-500/10 text-orange-300 flex items-center gap-1">
+                                <Clock className="w-2.5 h-2.5" />
+                                {({ h: 'past hour', d: '24h', w: 'week', m: 'month', y: 'year' } as any)[opt.freshness] || opt.freshness}
+                              </span>
+                            )}
                           </div>
                           {opt.niche && opt.location && (
                             <p className="text-xs text-gray-400">Targeting "{opt.niche}" in {opt.location}</p>
@@ -784,19 +938,19 @@ export default function Home() {
                   min="1"
                   max="1000"
                   value={limit}
-                  onChange={(e) => setLimit(Number(e.target.value))}
+                  onChange={(e) => setLimit(Math.max(1, Math.min(1000, Math.round(Number(e.target.value)) || 1)))}
                   className="w-full bg-black/50 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500/50 transition-all text-sm placeholder:text-gray-600 shadow-inner"
                   required
                 />
               </div>
 
-              <div className="w-full md:w-2/3">
+              <div className="w-full md:w-2/3 flex items-center gap-3">
                 <button
                   id="btn-run-engine"
                   type="submit"
                   disabled={isScraping || selectedOptionIndices.length === 0}
                   className={`
-                    w-full h-[46px] rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white relative overflow-hidden
+                    flex-1 h-[46px] rounded-xl font-medium transition-all flex items-center justify-center gap-2 text-white relative overflow-hidden
                     ${isScraping
                       ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 btn-pulse cursor-wait'
                       : 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-cyan-600 hover:shadow-lg hover:shadow-emerald-500/25 hover:scale-[1.02] active:scale-[0.98]'
@@ -815,6 +969,15 @@ export default function Home() {
                     )}
                   </span>
                 </button>
+                {isScraping && (
+                  <button
+                    type="button"
+                    onClick={stopScrape}
+                    className="h-[46px] px-5 rounded-xl font-medium flex items-center gap-2 text-red-300 bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 hover:border-red-500/50 transition-all active:scale-95"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" /> Stop
+                  </button>
+                )}
               </div>
             </div>
           </motion.form>
@@ -1116,6 +1279,18 @@ export default function Home() {
                             </div>
                           </div>
                           <div className="flex flex-wrap items-center gap-3 text-sm text-gray-300">
+                            {lead.freshness_label && (
+                              <div
+                                className={`flex items-center gap-1 px-2.5 py-1 rounded-md border font-semibold ${
+                                  (lead.age_hours ?? 99) < 6
+                                    ? 'bg-orange-500/15 border-orange-400/50 text-orange-300 shadow-[0_0_12px_rgba(249,115,22,0.25)]'
+                                    : 'bg-white/5 border-white/10 text-gray-300'
+                                }`}
+                                title={lead.posted_at ? `Posted ${new Date(lead.posted_at).toLocaleString()}` : 'Recency'}
+                              >
+                                <Clock className="w-3.5 h-3.5" /> {lead.freshness_label}
+                              </div>
+                            )}
                             {!isSocialLead && lead.rating && (
                               <div className="flex items-center gap-1 bg-white/5 px-2.5 py-1 rounded-md border border-white/10">
                                 <Star className="w-3.5 h-3.5 text-yellow-500 fill-yellow-500" />

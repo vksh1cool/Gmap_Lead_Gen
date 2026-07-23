@@ -139,8 +139,19 @@ class _Throttled(Exception):
     pass
 
 
+# ── Freshness windows ─────────────────────────────────────────────────────────
+# A freshness code ('d'/'w'/'m'/'y') asks a backend for recent results only.
+# Backends that can't honour it just ignore it — the caller's post-filtering
+# and date extraction still apply.
+# Serper honours 'h' (qdr:h) natively; Brave/CSE have no sub-day grain, so a
+# past-hour request falls back to their finest window (1 day) and the caller's
+# post-filter on the real result date does the fine cutting.
+_BRAVE_FRESHNESS = {"h": "pd", "d": "pd", "w": "pw", "m": "pm", "y": "py"}
+_CSE_FRESHNESS = {"h": "d1", "d": "d1", "w": "w1", "m": "m1", "y": "y1"}
+
+
 # ── Keyed backends ────────────────────────────────────────────────────────────
-def _serper(query: str, limit: int) -> Optional[List[Dict]]:
+def _serper(query: str, limit: int, freshness: Optional[str] = None) -> Optional[List[Dict]]:
     from .serper_keys import key_manager
 
     if not key_manager.active_key():
@@ -156,13 +167,16 @@ def _serper(query: str, limit: int) -> Optional[List[Dict]]:
             return None
 
         rotate = False
+        payload = {"q": query, "num": min(max(limit, 10), 30)}
+        if freshness in ("d", "w", "m", "y"):
+            payload["tbs"] = f"qdr:{freshness}"  # Google time filter via Serper
         for attempt in range(3):
             try:
                 r = _fetch(
                     "post",
                     "https://google.serper.dev/search",
                     headers={"X-API-KEY": key, "Content-Type": "application/json"},
-                    json={"q": query, "num": min(max(limit, 10), 30)},
+                    json=payload,
                     timeout=20,
                 )
             except Exception as exc:
@@ -186,23 +200,29 @@ def _serper(query: str, limit: int) -> Optional[List[Dict]]:
                 logger.warning("Serper error: %s", exc)
                 return []
             data = r.json()
+            # `date` is Google's own per-result date ("Mar 3, 2026" / "2 days ago")
+            # — the most reliable freshness signal we can get without visiting
+            # the page. google_dork.py parses it into posted_at.
             return [{"title": it.get("title", ""), "url": it.get("link", ""),
-                     "snippet": it.get("snippet", "")}
+                     "snippet": it.get("snippet", ""), "date": it.get("date", "")}
                     for it in data.get("organic", []) if it.get("link")]
         if rotate:
             continue
     return None
 
 
-def _brave(query: str, limit: int) -> Optional[List[Dict]]:
+def _brave(query: str, limit: int, freshness: Optional[str] = None) -> Optional[List[Dict]]:
     key = os.getenv("BRAVE_API_KEY")
     if not key:
         return None
+    params = {"q": query, "count": min(max(limit, 10), 20)}
+    if freshness in _BRAVE_FRESHNESS:
+        params["freshness"] = _BRAVE_FRESHNESS[freshness]
     try:
         r = requests.get(
             "https://api.search.brave.com/res/v1/web/search",
             headers={"X-Subscription-Token": key, "Accept": "application/json"},
-            params={"q": query, "count": min(max(limit, 10), 20)},
+            params=params,
             timeout=20,
         )
         if r.status_code == 429:
@@ -215,7 +235,9 @@ def _brave(query: str, limit: int) -> Optional[List[Dict]]:
         for it in (r.json().get("web", {}) or {}).get("results", []):
             url = it.get("url", "")
             if url:
-                out.append({"title": it.get("title", ""), "url": url, "snippet": it.get("description", "")})
+                out.append({"title": it.get("title", ""), "url": url,
+                            "snippet": it.get("description", ""),
+                            "date": it.get("page_age", "") or it.get("age", "")})
         return out
     except _Throttled:
         raise
@@ -224,15 +246,18 @@ def _brave(query: str, limit: int) -> Optional[List[Dict]]:
         return []
 
 
-def _google_cse(query: str, limit: int) -> Optional[List[Dict]]:
+def _google_cse(query: str, limit: int, freshness: Optional[str] = None) -> Optional[List[Dict]]:
     key = os.getenv("GOOGLE_CSE_KEY")
     cx = os.getenv("GOOGLE_CSE_CX")
     if not key or not cx:
         return None
+    params = {"key": key, "cx": cx, "q": query, "num": min(max(limit, 1), 10)}
+    if freshness in _CSE_FRESHNESS:
+        params["dateRestrict"] = _CSE_FRESHNESS[freshness]
     try:
         r = requests.get(
             "https://www.googleapis.com/customsearch/v1",
-            params={"key": key, "cx": cx, "q": query, "num": min(max(limit, 1), 10)},
+            params=params,
             timeout=20,
         )
         if r.status_code == 429:
@@ -254,7 +279,7 @@ def _google_cse(query: str, limit: int) -> Optional[List[Dict]]:
         return []
 
 
-def _searxng(query: str, limit: int) -> Optional[List[Dict]]:
+def _searxng(query: str, limit: int, freshness: Optional[str] = None) -> Optional[List[Dict]]:
     base = os.getenv("SEARXNG_URL")
     if not base:
         return None
@@ -605,11 +630,18 @@ def _soonest_retry() -> int:
                     if _backend_cooldown[n] > now), default=KEYLESS_COOLDOWN_S))
 
 
-def web_search(query: str, limit: int = 10, search_mode: str = "auto") -> List[Dict]:
+def web_search(query: str, limit: int = 10, search_mode: str = "auto",
+               freshness: Optional[str] = None) -> List[Dict]:
     """
     Run `query` through the best available backend, failing over on throttle/block.
 
-    Returns List[{title, url, snippet}].
+    `freshness` ('h'/'d'/'w'/'m'/'y' or None) asks backends for recent results
+    only — Serper honours it exactly (Google's qdr: filter); Brave/CSE honour it
+    to day-grain; keyless engines ignore it (the caller post-filters on the real
+    result date). This is what surfaces hours-old buyer comments before anyone
+    else replies.
+
+    Returns List[{title, url, snippet, date?}].
       • Keyed backends are trusted: a 0-result answer is returned as-is.
       • Keyless engines are flaky, so they're tried in randomised order and an
         empty answer fails over to the next engine.
@@ -630,11 +662,12 @@ def web_search(query: str, limit: int = 10, search_mode: str = "auto") -> List[D
                 threw_throttle = True
                 continue
             try:
-                results = fn(query, limit)
+                results = fn(query, limit, freshness)
                 if results is None:  # not configured
                     continue
                 tried.append(name)
-                logger.info("Search via '%s': %d results for %s", name, len(results), query)
+                logger.info("Search via '%s': %d results for %s (freshness=%s)",
+                            name, len(results), query, freshness or "any")
                 return results  # keyed backends are trusted, even when empty
             except _Throttled:
                 _cool_down(name, KEYED_COOLDOWN_S)

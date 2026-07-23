@@ -8,19 +8,24 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName } = body;
+    const { platform = 'gmaps', platforms, keyword, niche, location, limit = 10, apiKey, aiProvider, aiModel, searchMode = 'auto', websiteUrl, crawlDepth, groupName, freshness, offer } = body;
 
     // Support comma-separated platforms (e.g. "reddit,x,linkedin") or single platform
     const activePlatform = platforms || platform;
 
+    // Freshness code ('h'|'d'|'w'|'m'|'y'|'any') — surfaces hours-old buyer posts.
+    const freshnessCode = (freshness && String(freshness).trim()) || '';
+
     // AI preference for this request. Keys live in the server pool (seeded from
     // .env.local + added via the UI); these bias provider/model + optional override.
+    // `offer` (what the user sells) makes the scorer niche-agnostic.
     const aiPref: AiPref = {
       preferProvider: aiProvider,
       preferModel: aiModel,
       clientKey: apiKey || undefined,
       clientProvider: aiProvider,
       clientModel: aiModel,
+      offer,
     };
 
     let fetchUrl = '';
@@ -51,7 +56,7 @@ export async function POST(req: NextRequest) {
       }
       const optimizedKeyword = await optimizeSearchQuery(keyword, activePlatform, aiPref);
       searchQuery = `[${activePlatform}] ${optimizedKeyword}`;
-      fetchUrl = `http://127.0.0.1:8000/scrape-social?platform=${encodeURIComponent(activePlatform)}&keyword=${encodeURIComponent(optimizedKeyword)}&limit=${limit}&search_mode=${encodeURIComponent(searchMode)}`;
+      fetchUrl = `http://127.0.0.1:8000/scrape-social?platform=${encodeURIComponent(activePlatform)}&keyword=${encodeURIComponent(optimizedKeyword)}&limit=${limit}&search_mode=${encodeURIComponent(searchMode)}${freshnessCode ? `&freshness=${encodeURIComponent(freshnessCode)}` : ''}`;
     }
 
     const batchId = crypto.randomUUID();
@@ -79,7 +84,7 @@ export async function POST(req: NextRequest) {
           }
           
           if (!pythonResponse.ok || !pythonResponse.body) {
-             throw new Error('Python backend failed to start scraping.');
+             throw new Error(`Python backend responded with ${pythonResponse.status} — check the engine logs on port 8000.`);
           }
 
           const reader = pythonResponse.body.getReader();
@@ -90,9 +95,7 @@ export async function POST(req: NextRequest) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            console.log("RECEIVED CHUNK FROM PYTHON:", chunk.substring(0, 100) + '...');
-            buffer += chunk;
+            buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
@@ -136,14 +139,9 @@ export async function POST(req: NextRequest) {
                   rawLead.id = rawLead.id || rawLead.name.replace(/\s+/g, '-').toLowerCase().substring(0, 50);
                 }
 
-                // Send raw lead
-                console.log("Sending raw lead to frontend:", rawLead.name);
                 controller.enqueue(encoder.encode(JSON.stringify({ type: 'raw', data: rawLead }) + '\n'));
-                
-                // AI Score
-                console.log("Scoring lead:", rawLead.name);
+
                 const scoredLead = await scoreLead(rawLead, aiPref);
-                console.log("Scored lead:", scoredLead.name);
 
                 // Preserve fields the scorer may not echo back, so the live
                 // export (and CSV/Excel) has the Maps link + grouping metadata.
@@ -242,9 +240,13 @@ export async function POST(req: NextRequest) {
           }
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'done' }) + '\n'));
         } catch (e: any) {
-          controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', message: e.message }) + '\n'));
+          // The client may have disconnected/aborted mid-stream, in which case
+          // the controller is already closed and enqueue/close will throw.
+          try {
+            controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', message: e.message }) + '\n'));
+          } catch { /* stream already closed */ }
         } finally {
-          controller.close();
+          try { controller.close(); } catch { /* already closed */ }
         }
       }
     });

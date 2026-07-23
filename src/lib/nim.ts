@@ -10,6 +10,18 @@ export interface AiPref {
   clientKey?: string;
   clientProvider?: AiProvider;
   clientModel?: string;
+  /** What the user sells — makes the scorer rank buyers of THIS, not just websites. */
+  offer?: string;
+}
+
+// Default offer when the user hasn't set one. Kept broad so out-of-the-box the
+// tool still hunts the agency's bread-and-butter leads; overridden per-session
+// from the UI's "What I sell" field to make the whole engine niche-agnostic.
+export const DEFAULT_OFFER =
+  'web development, SEO, and AI automation (websites, landing pages, e-commerce, chatbots)';
+
+function offerOf(pref: AiPref): string {
+  return (pref.offer || '').trim() || DEFAULT_OFFER;
 }
 
 /**
@@ -305,13 +317,14 @@ export async function scoreLead(
   const isSocial = lead.category === 'Social Post' || (lead.kind && lead.kind !== 'business_listing');
   const isJobListing = lead.kind === 'job';
   const postContent = lead.post_content || safeSnippet || '';
+  const offer = offerOf(pref);
   let prompt = '';
 
   if (isJobListing) {
     // ── BRANCH 3: Job Listings (Upwork, etc.) — author is ALWAYS a buyer ──
     prompt = `
-You are an elite B2B Lead Qualifier for a digital agency specializing in web dev, SEO, and AI automation.
-You are analyzing a JOB LISTING. The author is ALWAYS a buyer — never a seller. Your job is to score based on project fit, budget signals, and scope clarity.
+You are an elite B2B Lead Qualifier for a business that sells: ${offer}.
+You are analyzing a JOB LISTING. The author is ALWAYS a buyer — never a seller. Your job is to score based on FIT WITH WHAT WE SELL, budget signals, and scope clarity.
 
 Job Title: ${lead.title || 'N/A'}
 Platform: ${lead.platform || 'upwork'}
@@ -319,10 +332,10 @@ Author: ${lead.author || lead.name}
 Job Content:
 ${postContent}
 
-Scoring Rules:
-- "Diamond" (Score 8-10): Clear budget mentioned ($1k+), detailed scope, strong service fit (web dev, SEO, AI, automation, landing pages, e-commerce).
+Scoring Rules (judge fit against WHAT WE SELL: ${offer}):
+- "Diamond" (Score 8-10): Clear budget mentioned ($1k+), detailed scope, strong fit with what we sell.
 - "Gold" (Score 5-7): Moderate fit — the project is related but vague on budget/scope, or is a small task.
-- "Junk" (Score 1-4): No service fit (e.g., data entry, accounting, legal). Tiny budget (<$100). Unrealistic expectations.
+- "Junk" (Score 1-4): No fit with what we sell. Tiny budget (<$100). Unrealistic expectations.
 
 Extract the core pain_point: What problem is the buyer trying to solve? (1 sentence)
 
@@ -337,7 +350,7 @@ Output this exact JSON (no markdown, no explanation):
     // ── BRANCH 2: Social Posts — must determine BUYER vs SELLER ──
     prompt = `
 You are an elite B2B Lead Qualifier. Your goal is to ruthlessly filter out junk and identify TRUE BUYERS from social media posts.
-Your agency specializes in web dev, SEO, and AI automation.
+YOUR BUSINESS SELLS: ${offer}. A "buyer" is anyone who needs what we sell.
 
 CRITICAL CHAIN-OF-THOUGHT INSTRUCTION:
 Step 1: Read the post below.
@@ -383,9 +396,10 @@ Output this exact JSON (no markdown, no explanation):
   } else {
     // ── BRANCH 1: Google Maps Business ──
     prompt = `
-You are an elite B2B Lead Qualifier and Cold Email Copywriter for a high-end digital marketing agency.
+You are an elite B2B Lead Qualifier and Cold Email Copywriter.
 Your goal is to analyze this Google Maps business and generate an incredibly personalized, high-converting cold email pitch.
-Your agency specializes in cutting-edge growth: Web Dev, SEO, AEO (Answer Engine Optimization), GEO (Generative Engine Optimization), and LLMO (LLM Optimization).
+YOUR BUSINESS SELLS: ${offer}. Frame every angle around how what we sell fixes this business's gaps.
+(If we sell web/SEO/AI, lean on the digital-presence gaps below; if we sell something else, use those gaps as openers, then pivot to our offer.)
 
 Business Data:
 ${JSON.stringify(safeLeadData, null, 2)}
@@ -506,7 +520,11 @@ export interface IntentOption {
   niche?: string;
   location?: string;
   keyword?: string;
+  /** Recommended recency window: 'h'|'d'|'w'|'m'|'any'. Fresh asks age fast. */
+  freshness?: string;
 }
+
+const VALID_FRESHNESS = new Set(['h', 'd', 'w', 'm', 'y', 'any']);
 
 export async function analyzeIntent(
   intent: string,
@@ -533,8 +551,12 @@ export async function analyzeIntent(
   if (niche) constraintsStr += `CRITICAL CONSTRAINT: The user explicitly wants this Business Category/Niche: "${niche}". Ensure your gmaps options use this exact niche.\n`;
   if (location) constraintsStr += `CRITICAL CONSTRAINT: The user explicitly wants this Target Location: "${location}". Ensure your gmaps options use this exact location.\n`;
 
+  const offer = offerOf(pref);
   const prompt = `
 You are an elite B2B Lead-Generation Strategist. A user pasted a natural-language "dump" of the leads they want. Convert it into a JSON array of sharp, ready-to-run scraping options, ordered highest-intent first.
+
+WHAT THE USER SELLS (their offer): ${offer}
+Every option must target BUYERS of this offer — people/businesses who need what the user sells. Do NOT assume they sell websites unless the offer says so.
 
 User Intent: "${intent}"
 
@@ -555,18 +577,23 @@ KEYWORD RULES (this is what makes or breaks lead quality):
 3. For gmaps, "niche" is the business category and "location" is the city/region — both concise.
 4. Prefer the SERVICE the user sells as the anchor (e.g. if they sell websites, target businesses that need websites).
 
+FRESHNESS (critical for buyer-intent posts — a comment 2 hours old converts, one 5 days old is already taken):
+- Add a "freshness" field to EACH option: one of "h" (past hour), "d" (past 24h), "w" (past week), "m" (past month), "any".
+- Social/forum asks (reddit, x, quora, facebook, instagram, upwork) age FAST → prefer "d" (or "h" if the user wants only the hottest).
+- Directory/business listings (gmaps, indiamart, justdial, linkedin company pages) don't decay → use "m" or "any".
+
 OUTPUT RULES:
 1. Generate 3-6 distinct, non-overlapping options. Spread across platforms when the intent supports it; don't duplicate the same query on one platform.
 2. If a physical/local business type or place is mentioned, ALWAYS include a "gmaps" option.
 3. Respect every CRITICAL CONSTRAINT above exactly. If platforms were restricted, use ONLY those.
-4. Every option needs a "label" (short human description). gmaps needs "niche"+"location"; all others need "keyword".
+4. Every option needs a "label" (short human description) and a "freshness". gmaps needs "niche"+"location"; all others need "keyword".
 5. Order the array by expected lead quality (strongest buyer-intent first).
 
 Output MUST be raw JSON only (no markdown fences, no commentary):
 [
-  { "platform": "gmaps", "label": "Google Maps: Roofing companies in Texas", "niche": "roofing companies", "location": "Texas" },
-  { "platform": "reddit", "label": "Reddit: businesses needing a roofer", "keyword": "roof leak recommendation" },
-  { "platform": "linkedin", "label": "LinkedIn: roofing business owners", "keyword": "roofing company owner" }
+  { "platform": "reddit", "label": "Reddit: businesses needing a roofer (fresh)", "keyword": "roof leak recommendation", "freshness": "d" },
+  { "platform": "gmaps", "label": "Google Maps: Roofing companies in Texas", "niche": "roofing companies", "location": "Texas", "freshness": "any" },
+  { "platform": "linkedin", "label": "LinkedIn: roofing business owners", "keyword": "roofing company owner", "freshness": "m" }
 ]
 `;
 
@@ -593,11 +620,18 @@ Output MUST be raw JSON only (no markdown fences, no commentary):
   const seen = new Set<string>();
   const options: IntentOption[] = [];
 
+  // Sensible per-family default when the model omits/garbles freshness.
+  const defaultFreshness = (p: string): string =>
+    (['gmaps', 'indiamart', 'justdial', 'linkedin'].includes(p) ? 'm' : 'd');
+
   for (const o of raw) {
     if (!o || typeof o !== 'object') continue;
     const platform = String(o.platform || '').toLowerCase().trim();
     if (!allowed.has(platform)) continue;                 // unknown platform → drop
     if (constrained && !platforms.includes(platform)) continue; // honour the constraint
+
+    const fRaw = String(o.freshness || '').toLowerCase().trim();
+    const freshness = VALID_FRESHNESS.has(fRaw) ? fRaw : defaultFreshness(platform);
 
     if (platform === 'gmaps') {
       const n = (o.niche || niche || '').toString().trim();
@@ -606,14 +640,14 @@ Output MUST be raw JSON only (no markdown fences, no commentary):
       const key = `gmaps|${n}|${l}`.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      options.push({ platform, label: (o.label || `Google Maps: ${n} in ${l}`).toString(), niche: n, location: l });
+      options.push({ platform, label: (o.label || `Google Maps: ${n} in ${l}`).toString(), niche: n, location: l, freshness });
     } else {
       const kw = (o.keyword || '').toString().trim();
       if (!kw) continue;                                  // social/Q&A needs a keyword
       const key = `${platform}|${kw}`.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      options.push({ platform, label: (o.label || `${platform}: ${kw}`).toString(), keyword: kw });
+      options.push({ platform, label: (o.label || `${platform}: ${kw}`).toString(), keyword: kw, freshness });
     }
   }
 

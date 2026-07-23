@@ -5,7 +5,7 @@ import { hasAnyKey } from '@/lib/aiKeyPool';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { intent, platforms, niche, location, apiKey, aiProvider, aiModel } = body;
+    const { intent, platforms, niche, location, apiKey, aiProvider, aiModel, offer } = body;
 
     if (!intent) {
       return NextResponse.json({ error: 'Intent is required' }, { status: 400 });
@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
       clientKey: apiKey || undefined,
       clientProvider: aiProvider,
       clientModel: aiModel,
+      offer,
     });
 
     return NextResponse.json({ options });

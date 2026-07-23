@@ -445,8 +445,9 @@ async def scrape_endpoint(niche: str, location: str, limit: int = 10):
         media_type="application/x-ndjson"
     )
 
-async def stream_social_leads(platform: str, keyword: str, limit: int, search_mode: str = "auto"):
-    result = await scrape_social_orchestrator(platform, keyword, limit, search_mode)
+async def stream_social_leads(platform: str, keyword: str, limit: int, search_mode: str = "auto",
+                              freshness: str = ""):
+    result = await scrape_social_orchestrator(platform, keyword, limit, search_mode, freshness or None)
     # Emit rate-limit notices first so the UI can pop the cooldown dialog early.
     for notice in result.get("notices", []):
         yield json.dumps(notice) + "\n"
@@ -454,9 +455,10 @@ async def stream_social_leads(platform: str, keyword: str, limit: int, search_mo
         yield json.dumps(lead) + "\n"
 
 @app.get("/scrape-social")
-async def scrape_social_endpoint(platform: str, keyword: str, limit: int = 10, search_mode: str = "auto"):
+async def scrape_social_endpoint(platform: str, keyword: str, limit: int = 10,
+                                 search_mode: str = "auto", freshness: str = ""):
     return StreamingResponse(
-        stream_social_leads(platform, keyword, limit, search_mode),
+        stream_social_leads(platform, keyword, limit, search_mode, freshness),
         media_type="application/x-ndjson"
     )
 

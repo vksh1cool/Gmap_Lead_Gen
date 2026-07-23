@@ -160,7 +160,11 @@ def _oauth_get(path: str, token: str, params: dict) -> dict:
     return {}
 
 
-async def _scrape_via_oauth(keyword: str, token: str, limit: int) -> List[Dict]:
+# Freshness code → Reddit's native `t` (time) search filter.
+_REDDIT_T = {"h": "hour", "d": "day", "w": "week", "m": "month", "y": "year"}
+
+
+async def _scrape_via_oauth(keyword: str, token: str, limit: int, t: str = "month") -> List[Dict]:
     all_leads: List[Dict] = []
     seen_ids: set = set()
 
@@ -170,9 +174,9 @@ async def _scrape_via_oauth(keyword: str, token: str, limit: int) -> List[Dict]:
                 seen_ids.add(lead["external_id"])
                 all_leads.append(lead)
 
-    # 1. Global search
+    # 1. Global search — `sort=new` + `t` window = only recent asks, newest first.
     await rate_limiter.wait("reddit")
-    _ingest(_oauth_get("/search", token, {"q": keyword, "sort": "new", "t": "month", "limit": limit, "raw_json": 1}))
+    _ingest(_oauth_get("/search", token, {"q": keyword, "sort": "new", "t": t, "limit": limit, "raw_json": 1}))
 
     # 2. A few targeted subreddits
     for sub in random.sample(SUBREDDITS, min(4, len(SUBREDDITS))):
@@ -180,35 +184,41 @@ async def _scrape_via_oauth(keyword: str, token: str, limit: int) -> List[Dict]:
             break
         await rate_limiter.wait("reddit")
         _ingest(_oauth_get(f"/r/{sub}/search", token,
-                           {"q": keyword, "restrict_sr": 1, "sort": "new", "t": "month", "limit": 10, "raw_json": 1}))
+                           {"q": keyword, "restrict_sr": 1, "sort": "new", "t": t, "limit": 10, "raw_json": 1}))
 
     if all_leads:
         rate_limiter.report_success("reddit")
     return all_leads[:limit]
 
 
-async def _scrape_via_dork(keyword: str, limit: int) -> List[Dict]:
+async def _scrape_via_dork(keyword: str, limit: int, freshness=None) -> List[Dict]:
     """Zero-config fallback: dork reddit.com via Google."""
-    leads = await scrape_google_dork("reddit", "reddit.com", keyword, limit=limit)
+    leads = await scrape_google_dork("reddit", "reddit.com", keyword, limit=limit, freshness=freshness)
     for lead in leads:
         lead["address"] = "Reddit"
         lead["author_url"] = lead.get("post_url", "")
     return leads
 
 
-async def scrape_reddit(keyword: str, limit: int = 30) -> List[Dict]:
-    """Main entry point called by the orchestrator."""
+async def scrape_reddit(keyword: str, limit: int = 30, freshness=None) -> List[Dict]:
+    """Main entry point called by the orchestrator.
+
+    `freshness` ('h'/'d'/'w'/'m'/'y') maps to Reddit's native time filter so we
+    pull only recent buyer asks — the whole point of catching a comment while
+    it's hours old and still unanswered.
+    """
     if not rate_limiter.can_scrape("reddit"):
         logger.info("Reddit rate-limited or circuit-broken, skipping")
         return []
 
+    t = _REDDIT_T.get(freshness or "", "month")
     token = _get_oauth_token()
     if token:
-        leads = await _scrape_via_oauth(keyword, token, limit)
+        leads = await _scrape_via_oauth(keyword, token, limit, t=t)
         if leads:
             return leads
         logger.info("Reddit OAuth returned 0 — falling back to dork")
     else:
         logger.info("Reddit OAuth not configured (set REDDIT_CLIENT_ID) — using dork fallback")
 
-    return await _scrape_via_dork(keyword, limit)
+    return await _scrape_via_dork(keyword, limit, freshness=freshness)

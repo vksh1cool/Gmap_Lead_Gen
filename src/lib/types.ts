@@ -27,6 +27,11 @@ export interface RawLead {
   title?: string;
   matched_keyword?: string;
   posted_at?: string;
+  created_at?: string;
+  /** Age of the post in hours at scrape time (null/undefined = unknown). */
+  age_hours?: number | null;
+  /** Pre-rendered recency badge, e.g. "🔥 2h ago". */
+  freshness_label?: string;
   external_id?: string;
 }
 
