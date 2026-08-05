@@ -86,6 +86,7 @@ export default function CRMPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [platformFilter, setPlatformFilter] = useState("All");
@@ -217,13 +218,25 @@ export default function CRMPage() {
     }
   };
 
-  const downloadGroup = (batch: any) => {
-    exportLeadsToExcel(batch.leads, {
+  const runExport = async (leadsToExport: any[], opts: Parameters<typeof exportLeadsToExcel>[1]) => {
+    if (isExporting) return;
+    setIsExporting(true);
+    try {
+      await exportLeadsToExcel(leadsToExport, opts);
+    } catch (e) {
+      console.error("Failed to export Excel:", e);
+      alert(`Failed to export Excel: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const downloadGroup = (batch: any) =>
+    runExport(batch.leads, {
       groupName: batch.group_name || batch.search_query || 'Leads',
       cityState: batch.location,
       sheetName: batch.group_name || 'Leads',
     });
-  };
 
   return (
     <div className="space-y-8 pb-12">
@@ -237,11 +250,12 @@ export default function CRMPage() {
         {leads.length > 0 && (
           <div className="flex items-center gap-3">
             <button
-              onClick={() => exportLeadsToExcel(filteredLeads, { groupName: 'AllLeads', cityState: '', sheetName: 'All Leads' })}
-              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-xl text-sm font-bold transition-all shadow-sm"
+              onClick={() => runExport(filteredLeads, { groupName: 'AllLeads', cityState: '', sheetName: 'All Leads' })}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/20 rounded-xl text-sm font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download size={16} />
-              Export All ({filteredLeads.length})
+              {isExporting ? 'Exporting…' : `Export All (${filteredLeads.length})`}
             </button>
             <button
               onClick={clearAllLeads}

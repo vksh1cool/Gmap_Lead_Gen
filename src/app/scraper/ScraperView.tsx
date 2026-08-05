@@ -205,6 +205,7 @@ export default function Home() {
   const [crawlDepth, setCrawlDepth] = useState<number>(2);
 
   const [isScraping, setIsScraping] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [leads, setLeads] = useState<ScoredLead[]>([]);
   const [progress, setProgress] = useState<string>('');
   const [uiError, setUiError] = useState('');
@@ -493,10 +494,11 @@ export default function Home() {
     }
   };
 
-  const exportExcel = () => {
-    if (leads.length === 0) return;
+  const exportExcel = async () => {
+    if (leads.length === 0 || isExporting) return;
+    setIsExporting(true);
     try {
-      const filename = exportLeadsToExcel(leads, {
+      const filename = await exportLeadsToExcel(leads, {
         groupName: groupName || niche || 'Leads',
         cityState: location,
         sheetName: groupName || 'Leads',
@@ -505,6 +507,8 @@ export default function Home() {
     } catch (err: any) {
       console.error(err);
       setUiError(`Failed to export Excel: ${err?.message || err}`);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -590,9 +594,10 @@ export default function Home() {
                 <button
                   id="btn-export-excel"
                   onClick={exportExcel}
-                  className="flex items-center gap-2 px-6 py-3 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-300 rounded-full transition-all text-sm font-medium backdrop-blur-sm"
+                  disabled={isExporting}
+                  className="flex items-center gap-2 px-6 py-3 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-300 rounded-full transition-all text-sm font-medium backdrop-blur-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Download className="w-4 h-4" /> Export Excel ({leads.length})
+                  <Download className="w-4 h-4" /> {isExporting ? 'Exporting…' : `Export Excel (${leads.length})`}
                 </button>
               </motion.div>
             )}
